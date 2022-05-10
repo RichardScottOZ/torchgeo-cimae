@@ -92,6 +92,7 @@ from .utils import (
     BoundingBox,
     concat_samples,
     merge_samples,
+    search_stac,
     stack_samples,
     unbind_samples,
 )
@@ -192,6 +193,7 @@ __all__ = (
     "merge_samples",
     "stack_samples",
     "unbind_samples",
+    "search_stac",
 )
 
 # https://stackoverflow.com/questions/40018681

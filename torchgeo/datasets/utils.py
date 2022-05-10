@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import (
     Any,
+    Collection,
     Dict,
     Iterable,
     Iterator,
@@ -30,6 +31,9 @@ from typing import (
 import numpy as np
 import rasterio
 import torch
+from pystac.item import Item
+from pystac_client import Client
+from shapely.geometry import Polygon
 from torch import Tensor
 from torchvision.datasets.utils import check_integrity, download_url
 from torchvision.utils import draw_segmentation_masks
@@ -612,6 +616,43 @@ def rasterio_loader(path: str) -> "np.typing.NDArray[np.int_]":
         # VisionClassificationDataset expects images returned with channels last (HWC)
         array = array.transpose(1, 2, 0)
     return array
+
+
+def search_stac(
+    collections: Union[str, Collection[str]],
+    area_of_interest: Union[BoundingBox, Polygon],
+    time_range: str,
+    stac_url: str = "https://planetarycomputer.microsoft.com/api/stac/v1",
+) -> Iterator[Item]:
+    """Uses the pystac_client to search a stac collection.
+
+    Args:
+        collections (Union[str, Collection[str]]): name of collection
+        area_of_interest (Union[BoundingBox, Polygon]): area of interest either as BoundingBox or Polygon
+        time_range (str): time range to search formatted as year-month-day/year-month-day (from/till)
+        stac_url (str): url of the stac collection
+
+    Yields:
+        Iterator[Item]: iterator of items found
+    """
+    if isinstance(area_of_interest, BoundingBox):
+        area_of_interest = Polygon(
+            [
+                (area_of_interest.minx, area_of_interest.miny),
+                (area_of_interest.maxx, area_of_interest.miny),
+                (area_of_interest.maxx, area_of_interest.maxy),
+                (area_of_interest.minx, area_of_interest.maxy),
+                (area_of_interest.minx, area_of_interest.miny),
+            ]
+        )
+
+    catalog = Client.open(stac_url)
+
+    items: Iterator[Item] = catalog.search(
+        collections=collections, intersects=area_of_interest, datetime=time_range
+    ).get_items()
+
+    return items
 
 
 def sort_sentinel2_bands(x: str) -> str:
