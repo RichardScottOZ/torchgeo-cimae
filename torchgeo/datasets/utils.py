@@ -535,6 +535,62 @@ def stack_samples(samples: Iterable[Dict[Any, Any]]) -> Dict[Any, Any]:
     return collated
 
 
+def stack_tuplet_samples(
+    samples: Iterable[Dict[Any, Any]]
+) -> Dict[Any, Any]:
+    """Stack a list of tuplet samples along a new axis.
+
+    Useful for forming a mini-batch of samples to pass to
+    :class:`torch.utils.data.DataLoader`.
+
+    Args:
+        samples: list of samples
+
+    Returns:
+        a single sample
+
+    .. versionadded:: 0.2
+    """
+    collated: Dict[Any, Any] = stack_samples(samples)
+    images = collated["image"]
+
+    collated["image"] = torch.stack([
+        images[::2],
+        images[1::2],
+    ]).transpose(1, 0)
+
+    return collated
+
+
+def stack_triplet_samples(
+    samples: Iterable[Dict[Any, Any]]
+) -> Dict[Any, Any]:
+    """Stack a list of triplet samples along a new axis.
+
+    Useful for forming a mini-batch of samples to pass to
+    :class:`torch.utils.data.DataLoader`.
+
+    Args:
+        samples: list of samples
+        get_negative: whether negative was sampled
+
+    Returns:
+        a single sample
+
+    .. versionadded:: 0.2
+    """
+    collated: Dict[Any, Any] = stack_samples(samples)
+    images = collated["image"]
+
+    collated["image"] = torch.stack([
+        images[::3],
+        images[1::3],
+        images[2::3]
+    ]).transpose(1, 0)
+
+    return collated
+
+
 def concat_samples(samples: Iterable[Dict[Any, Any]]) -> Dict[Any, Any]:
     """Concatenate a list of samples along an existing axis.
 
