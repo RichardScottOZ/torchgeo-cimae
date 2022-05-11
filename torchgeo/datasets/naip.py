@@ -37,12 +37,11 @@ class NAIP(RasterDataset):
     # https://planetarycomputer.microsoft.com/dataset/naip#Storage-Documentation
     filename_glob = "*m_*.*"
     filename_regex = r"""
-        ^(?:(?P<state>[a-z]+)_)?
-        m
+        ^m
         _(?P<quadrangle>\d+)
         _(?P<quarter_quad>[a-z]+)
         _(?P<utm_zone>\d+)
-        _(?P<resolution>\d+)
+        _(?P<resolution>(\d+|[a-z]+))
         _(?P<date>\d+)
         (?:_(?P<processing_date>\d+))?
         \..*$
@@ -60,7 +59,7 @@ class NAIP(RasterDataset):
         transforms: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
         cache: bool = True,
         area_of_interest: Optional[Union[BoundingBox, Polygon]] = None,
-        time_range: Optional[str] = None,
+        date_range: Optional[str] = None,
         download: bool = True,
     ) -> None:
         """Initialize a new Dataset instance.
@@ -75,7 +74,7 @@ class NAIP(RasterDataset):
                 and returns a transformed version
             cache: if True, cache file handle to speed up repeated sampling
             area_of_interest: BoundingBox or Polygon of interest
-            time_range: Range of time to search in
+            date_range: Range of time to search in
             download: if True, download dataset and store it in the root directory
 
         Raises:
@@ -84,7 +83,7 @@ class NAIP(RasterDataset):
         """
         self.root = root
         self.area_of_interest = area_of_interest
-        self.time_range = time_range
+        self.date_range = date_range
         self.download = download
 
         self._verify()
@@ -101,24 +100,23 @@ class NAIP(RasterDataset):
         if self.area_of_interest is None:
             return
 
-        if self.time_range is None:
+        if self.date_range is None:
             raise RuntimeError(
-                "`area_of_interest` specificed but no `time_range` provided."
+                "`area_of_interest` specificed but no `date_range` provided."
             )
 
-        items = search_stac("naip", self.area_of_interest, self.time_range)
+        items = search_stac("naip", self.area_of_interest, self.date_range)
 
         for item in items:
-            filename = f"{item.id}.tif"
             url = item.get_assets()["image"].href
 
-            if os.path.exists(os.path.join(self.root, filename)):
+            if os.path.exists(os.path.join(self.root)):
                 continue
 
             # Check if the user requested to download the dataset
             if not self.download:
                 raise RuntimeError(
-                    f"{filename} not found in `root={self.root}` and `download=False`, "
+                    f"File not found in `root={self.root}` and `download=False`, "
                     "either specify a different `root` directory"
                     " or use `download=True` to automaticaly download the dataset."
                 )
