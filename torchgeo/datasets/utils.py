@@ -47,6 +47,8 @@ __all__ = (
     "disambiguate_timestamp",
     "working_dir",
     "stack_samples",
+    "stack_tuplet_samples",
+    "stack_triplet_samples",
     "concat_samples",
     "merge_samples",
     "unbind_samples",
