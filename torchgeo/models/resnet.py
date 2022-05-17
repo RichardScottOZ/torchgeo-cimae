@@ -18,9 +18,9 @@ MODEL_URLS = {
 }
 
 
-IN_CHANNELS = {"sentinel2": {"all": 10}}
+IN_CHANNELS = {"sentinel2": {"all": 10}, "naip": {"all": 4}}
 
-NUM_CLASSES = {"sentinel2": 17}
+NUM_CLASSES = {"sentinel2": 17, "naip": 0}
 
 
 def _resnet(
@@ -49,7 +49,7 @@ def _resnet(
         progress: if True, displays a progress bar of the download to stderr
 
     Returns:
-        A ResNet-50 model
+        A ResNet model
     """
     # Initialize a new model
     model = ResNet(block, layers, NUM_CLASSES[sensor], **kwargs)
@@ -65,6 +65,7 @@ def _resnet(
     )
 
     # Load pretrained weights
+    # TODO: Add naip model_url
     if pretrained:
         state_dict = load_state_dict_from_url(  # type: ignore[no-untyped-call]
             MODEL_URLS[sensor][bands][arch], progress=progress
@@ -72,6 +73,40 @@ def _resnet(
         model.load_state_dict(state_dict)
 
     return model
+
+
+def resnet18(
+    sensor: str,
+    bands: str,
+    pretrained: bool = False,
+    progress: bool = True,
+    **kwargs: Any,
+) -> ResNet:
+    """ResNet-18 model.
+
+    If you use this model in your research, please cite the following paper:
+
+    * https://arxiv.org/pdf/1512.03385.pdf
+
+    Args:
+        sensor: imagery source which determines number of input channels
+        bands: which spectral bands to consider: "all", "rgb", etc.
+        pretrained: if True, returns a model pre-trained on ``sensor`` imagery
+        progress: if True, displays a progress bar of the download to stderr
+
+    Returns:
+        A ResNet-18 model
+    """
+    return _resnet(
+        sensor,
+        bands,
+        "resnet18",
+        Bottleneck,
+        [2, 2, 2, 2],
+        pretrained,
+        progress,
+        **kwargs,
+    )
 
 
 def resnet50(

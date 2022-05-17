@@ -317,7 +317,6 @@ class TripletGeoSampler(GeoSampler):
         dataset: GeoDataset,
         size: Union[Tuple[float, float], float],
         neighborhood: int,
-        get_negative: bool,
         length: int,
         roi: Optional[BoundingBox] = None,
         units: Units = Units.PIXELS,
@@ -335,7 +334,6 @@ class TripletGeoSampler(GeoSampler):
             dataset: dataset to index from
             size: dimensions of each :term:`patch`
             neighborhood: size of positive sampling neighborhood
-            get_negative: if negative sample is returned
             length: number of random samples to draw per epoch
             roi: region of interest to sample from (minx, maxx, miny, maxy, mint, maxt)
                 (defaults to the bounds of ``dataset.index``)
@@ -348,7 +346,6 @@ class TripletGeoSampler(GeoSampler):
             self.size = (self.size[0] * self.res, self.size[1] * self.res)
 
         self.neighborhood = neighborhood
-        self.get_negative = get_negative
         self.length = length
         self.hits = []
         areas = []
@@ -381,8 +378,6 @@ class TripletGeoSampler(GeoSampler):
             # Choose a random index within that tile
             anchor_bbox = get_random_bounding_box(bounds, self.size, self.res)
 
-            yield anchor_bbox
-
             mid_x, mid_y = (
                 anchor_bbox.minx + (anchor_bbox.maxx - anchor_bbox.minx) / 2,
                 anchor_bbox.miny + (anchor_bbox.maxy - anchor_bbox.miny) / 2,
@@ -399,23 +394,20 @@ class TripletGeoSampler(GeoSampler):
                 bounds.maxt,
             )
 
-            positive_bbox = get_random_bounding_box(
+            neighbor_bbox = get_random_bounding_box(
                 neighborhood_bounds, self.size, self.res
             )
 
-            yield positive_bbox
+            # Choose another random tile, weighted by area
+            idx = torch.multinomial(self.areas, 1)
+            hit = self.hits[idx]
+            bounds = BoundingBox(*hit.bounds)
 
-            if self.get_negative:
-                # Choose another random tile, weighted by area
-                idx = torch.multinomial(self.areas, 1)
-                hit = self.hits[idx]
-                bounds = BoundingBox(*hit.bounds)
+            distant_bbox = get_random_bounding_box(bounds, self.size, self.res)
+            while distant_bbox in neighborhood_bounds:
+                distant_bbox = get_random_bounding_box(bounds, self.size, self.res)
 
-                negative_bbox = get_random_bounding_box(bounds, self.size, self.res)
-                while negative_bbox in neighborhood_bounds:
-                    negative_bbox = get_random_bounding_box(bounds, self.size, self.res)
-
-                yield negative_bbox
+            yield from [anchor_bbox, neighbor_bbox, distant_bbox]
 
     def __len__(self) -> int:
         """Return the number of samples in a single epoch.
@@ -423,4 +415,4 @@ class TripletGeoSampler(GeoSampler):
         Returns:
             length of the epoch
         """
-        return self.length // (3 if self.get_negative else 2)
+        return self.length

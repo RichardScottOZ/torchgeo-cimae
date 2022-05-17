@@ -94,7 +94,6 @@ from .utils import (
     merge_samples,
     search_stac,
     stack_samples,
-    stack_tuplet_samples,
     stack_triplet_samples,
     unbind_samples,
 )
@@ -194,7 +193,6 @@ __all__ = (
     "concat_samples",
     "merge_samples",
     "stack_samples",
-    "stack_tuplet_samples",
     "stack_triplet_samples",
     "unbind_samples",
     "search_stac",

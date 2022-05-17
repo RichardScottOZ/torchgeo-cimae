@@ -12,7 +12,7 @@ from .eurosat import EuroSATDataModule
 from .fair1m import FAIR1MDataModule
 from .landcoverai import LandCoverAIDataModule
 from .loveda import LoveDADataModule
-from .naip import NAIPChesapeakeDataModule
+from .naip import NAIPCDLDataModule, NAIPChesapeakeDataModule
 from .nasa_marine_debris import NASAMarineDebrisDataModule
 from .oscd import OSCDDataModule
 from .potsdam import Potsdam2DDataModule
@@ -27,6 +27,7 @@ __all__ = (
     # GeoDataset
     "ChesapeakeCVPRDataModule",
     "NAIPChesapeakeDataModule",
+    "NAIPCDLDataModule",
     # VisionDataset
     "BigEarthNetDataModule",
     "COWCCountingDataModule",

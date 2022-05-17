@@ -7,8 +7,10 @@ from .byol import BYOLTask
 from .classification import ClassificationTask, MultiLabelClassificationTask
 from .regression import RegressionTask
 from .segmentation import SemanticSegmentationTask
+from .tile2vec import Tile2VecTask
 
 __all__ = (
+    "Tile2VecTask",
     "BYOLTask",
     "ClassificationTask",
     "MultiLabelClassificationTask",
