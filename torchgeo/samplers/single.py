@@ -28,23 +28,27 @@ class GeoSampler(Sampler[BoundingBox], abc.ABC):
     longitude, height, width, projection, coordinate system, and time.
     """
 
-    def __init__(self, dataset: GeoDataset, roi: Optional[BoundingBox] = None) -> None:
+    def __init__(self, dataset: GeoDataset, roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None) -> None:
         """Initialize a new Sampler instance.
 
         Args:
             dataset: dataset to index from
-            roi: region of interest to sample from (minx, maxx, miny, maxy, mint, maxt)
+            roi: region of interest or multiple region of interest to sample from (minx, maxx, miny, maxy, mint, maxt)
                 (defaults to the bounds of ``dataset.index``)
         """
-        if roi is None:
+        if not isinstance(roi, Sequence):
+            roi = [roi]
+
+        if None in roi:
             self.index = dataset.index
-            roi = BoundingBox(*self.index.bounds)
+            roi = BoundingBox(*self.index.bounds)            
         else:
-            self.index = Index(interleaved=False, properties=Property(dimension=3))
-            hits = dataset.index.intersection(tuple(roi), objects=True)
-            for hit in hits:
-                bbox = BoundingBox(*hit.bounds) & roi
-                self.index.insert(hit.id, tuple(bbox), hit.object)
+            for region in roi:
+                self.index = Index(interleaved=False, properties=Property(dimension=3))
+                hits = dataset.index.intersection(tuple(region), objects=True)
+                for hit in hits:
+                    bbox = BoundingBox(*hit.bounds) & region
+                    self.index.insert(hit.id, tuple(bbox), hit.object)
 
         self.res = dataset.res
         self.roi = roi
