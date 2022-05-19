@@ -3,22 +3,19 @@
 
 """Tile2Vec tasks."""
 
-import random
-from typing import Any, Callable, Dict, Optional, Tuple, cast
+from typing import Any, Dict, Optional, Tuple, cast
 
 import torch
-import torch.nn.functional as F
 from kornia import augmentation as K
-from kornia import filters
-from kornia.augmentation.container import ImageSequential
 from kornia.geometry.transform import Rotate
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
-from torch.autograd import Variable
 from torch.nn.modules import BatchNorm1d, Conv2d, Linear, Module, ReLU, Sequential
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from torchgeo.models import resnet18, resnet50
+
+from ..utils import _to_tuple
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
@@ -49,7 +46,11 @@ def triplet_loss(
     loss = torch.relu(distance).mean()
 
     if regularize:
-        loss += torch.norm(anchor) + torch.norm(neighbor) + torch.norm(distant)
+        loss += (
+            torch.linalg.norm(anchor)
+            + torch.linalg.norm(neighbor)
+            + torch.linalg.norm(distant)
+        )
 
     return loss
 
@@ -95,7 +96,7 @@ class Augmentations(Module):
         Returns:
             an augmented batch of imagery
         """
-        return self.augmentation(x)
+        return cast(Tensor, self.augmentation(x))
 
 
 class Tile2Vec(Module):
@@ -130,7 +131,7 @@ class Tile2Vec(Module):
         self.model = model
 
     def forward(self, x: Tensor) -> Tensor:
-        """Forward pass of the model
+        """Forward pass of the model.
 
         Args:
             x: tensor of data to run through the model
@@ -138,7 +139,7 @@ class Tile2Vec(Module):
         Returns:
             output from the model
         """
-        return self.model(x).squeeze()
+        return cast(Tensor, self.model(x).squeeze())
 
 
 class Tile2VecTask(LightningModule):
@@ -168,7 +169,10 @@ class Tile2VecTask(LightningModule):
 
         encoder = Sequential(*(list(encoder.children())[:-1]))
 
-        self.model = Tile2Vec(encoder, image_size=(256, 256))
+        image_size = self.hyperparams.get("image_size", (256, 256))
+        image_size = _to_tuple(image_size)
+
+        self.model = Tile2Vec(encoder, image_size=image_size)
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize a LightningModule for pre-training a model with Tile2Vec.

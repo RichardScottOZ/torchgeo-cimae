@@ -47,7 +47,6 @@ __all__ = (
     "disambiguate_timestamp",
     "working_dir",
     "stack_samples",
-    "stack_tuplet_samples",
     "stack_triplet_samples",
     "concat_samples",
     "merge_samples",
@@ -557,8 +556,6 @@ def stack_triplet_samples(samples: Iterable[Dict[Any, Any]]) -> Dict[Any, Any]:
 
     collated["image"] = torch.stack(
         [images[::3], images[1::3], images[2::3]]
-        if images.shape[0] % 3 == 0
-        else [images[3::3], images[1::3], images[2::3]]
     ).transpose(1, 0)
 
     return collated

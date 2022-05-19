@@ -3,10 +3,10 @@
 
 """National Agriculture Imagery Program (NAIP) datamodule."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence, Union
 
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader, Sampler
+from torch.utils.data import DataLoader
 
 from ..datasets import (
     CDL,
@@ -16,6 +16,8 @@ from ..datasets import (
     stack_samples,
     stack_triplet_samples,
 )
+from ..samplers.batch import RandomBatchGeoSampler, TripletBatchGeoSampler
+from ..samplers.single import GridGeoSampler
 from .utils import roi_split_half
 
 # https://github.com/pytorch/pytorch/issues/60979
@@ -179,28 +181,26 @@ class NAIPCDLDataModule(pl.LightningDataModule):
     Uses the train/val/test splits from the dataset.
     """
 
-    # TODO: tune these hyperparams
-    length = 1000
-    stride = 128
-
     def __init__(
         self,
         naip_root_dir: str,
         cdl_root_dir: str,
         batch_size: int = 64,
+        length: int = 1000,
         num_workers: int = 0,
         patch_size: int = 256,
         neighborhood: int = 100,
         dataset_split: Callable[
             ..., Sequence[Union[BoundingBox, Sequence[BoundingBox]]]
         ] = roi_split_half,
+        pin_memory: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize a LightningDataModule for NAIP and Chesapeake based DataLoaders.
 
         Args:
             naip_root_dir: directory containing NAIP data
-            chesapeake_root_dir: directory containing Chesapeake data
+            cdl_root_dir: directory containing Chesapeake data
             batch_size: The batch size to use in all created DataLoaders
             num_workers: The number of workers to use in all created DataLoaders
             patch_size: size of patches to sample
@@ -209,11 +209,13 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         self.naip_root_dir = naip_root_dir
         self.cdl_root_dir = cdl_root_dir
         self.batch_size = batch_size
+        self.length = length
         self.num_workers = num_workers
         self.patch_size = patch_size
         self.neighborhood = neighborhood
         self.dataset_split = dataset_split
         self.pin_memory = pin_memory
+        self.kwargs = kwargs
 
     def naip_transform(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         """Transform a single sample from the NAIP Dataset.
@@ -262,7 +264,6 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             stage: state to set up
         """
         naip = NAIP(self.naip_root_dir, transforms=self.naip_transform)
-
         cdl = CDL(self.cdl_root_dir, naip.crs, naip.res, transforms=self.cdl_transform)
 
         self.dataset = naip & cdl
@@ -271,11 +272,20 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         roi = self.dataset.bounds
         train_roi, val_roi, test_roi = self.dataset_split(roi, **self.kwargs)
 
-        self.train_sampler = TripletGeoSampler(
-            naip, self.patch_size, self.neighborhood, self.length, train_roi
+        self.train_sampler = TripletBatchGeoSampler(
+            naip,
+            self.patch_size,
+            self.neighborhood,
+            self.batch_size,
+            self.length,
+            train_roi,
         )
-        self.val_sampler = GridGeoSampler(naip, self.patch_size, self.stride, val_roi)
-        self.test_sampler = GridGeoSampler(naip, self.patch_size, self.stride, test_roi)
+        self.val_sampler = GridGeoSampler(
+            naip, self.patch_size, self.patch_size, val_roi
+        )
+        self.test_sampler = GridGeoSampler(
+            naip, self.patch_size, self.patch_size, test_roi
+        )
 
     def train_dataloader(self) -> DataLoader[Any]:
         """Return a DataLoader for training.
@@ -285,10 +295,10 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         """
         return DataLoader(
             self.dataset,
-            batch_size=self.batch_size,
-            sampler=self.train_sampler,
+            batch_sampler=self.train_sampler,
             num_workers=self.num_workers,
             collate_fn=stack_triplet_samples,
+            pin_memory=self.pin_memory,
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
@@ -302,7 +312,8 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             sampler=self.val_sampler,
             num_workers=self.num_workers,
-            collate_fn=stack_triplet_samples,
+            collate_fn=stack_samples,
+            pin_memory=self.pin_memory,
         )
 
     def test_dataloader(self) -> DataLoader[Any]:
@@ -316,5 +327,6 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             sampler=self.test_sampler,
             num_workers=self.num_workers,
-            collate_fn=stack_triplet_samples,
+            collate_fn=stack_samples,
+            pin_memory=self.pin_memory,
         )

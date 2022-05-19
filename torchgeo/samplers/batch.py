@@ -4,7 +4,7 @@
 """TorchGeo batch samplers."""
 
 import abc
-from typing import Iterator, List, Optional, Tuple, Union
+from typing import Iterator, List, Optional, Sequence, Tuple, Union
 
 import torch
 from rtree.index import Index, Property
@@ -28,7 +28,11 @@ class BatchGeoSampler(Sampler[List[BoundingBox]], abc.ABC):
     longitude, height, width, projection, coordinate system, and time.
     """
 
-    def __init__(self, dataset: GeoDataset, roi: Optional[BoundingBox] = None) -> None:
+    def __init__(
+        self,
+        dataset: GeoDataset,
+        roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+    ) -> None:
         """Initialize a new Sampler instance.
 
         Args:
@@ -36,15 +40,19 @@ class BatchGeoSampler(Sampler[List[BoundingBox]], abc.ABC):
             roi: region of interest to sample from (minx, maxx, miny, maxy, mint, maxt)
                 (defaults to the bounds of ``dataset.index``)
         """
-        if roi is None:
+        if roi is None or not roi:
             self.index = dataset.index
             roi = BoundingBox(*self.index.bounds)
         else:
+            if not isinstance(roi, Sequence):
+                roi = [roi]
+
             self.index = Index(interleaved=False, properties=Property(dimension=3))
-            hits = dataset.index.intersection(tuple(roi), objects=True)
-            for hit in hits:
-                bbox = BoundingBox(*hit.bounds) & roi
-                self.index.insert(hit.id, tuple(bbox), hit.object)
+            for region in roi:
+                hits = dataset.index.intersection(tuple(region), objects=True)
+                for hit in hits:
+                    bbox = BoundingBox(*hit.bounds) & region
+                    self.index.insert(hit.id, tuple(bbox), hit.object)
 
         self.res = dataset.res
         self.roi = roi
@@ -71,7 +79,7 @@ class RandomBatchGeoSampler(BatchGeoSampler):
         size: Union[Tuple[float, float], float],
         batch_size: int,
         length: int,
-        roi: Optional[BoundingBox] = None,
+        roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
         units: Units = Units.PIXELS,
     ) -> None:
         """Initialize a new Sampler instance.
@@ -105,7 +113,7 @@ class RandomBatchGeoSampler(BatchGeoSampler):
         self.length = length
         self.hits = []
         areas = []
-        for hit in self.index.intersection(tuple(self.roi), objects=True):
+        for hit in self.index.intersection(tuple(dataset.bounds), objects=True):
             bounds = BoundingBox(*hit.bounds)
             if (
                 bounds.maxx - bounds.minx >= self.size[1]
@@ -137,6 +145,130 @@ class RandomBatchGeoSampler(BatchGeoSampler):
 
                 bounding_box = get_random_bounding_box(bounds, self.size, self.res)
                 batch.append(bounding_box)
+
+            yield batch
+
+    def __len__(self) -> int:
+        """Return the number of batches in a single epoch.
+
+        Returns:
+            number of batches in an epoch
+        """
+        return self.length // self.batch_size
+
+
+class TripletBatchGeoSampler(BatchGeoSampler):
+    """Samples batches of elements from a region of interest randomly.
+
+    This is particularly useful during training when you want to maximize the size of
+    the dataset and return as many random :term:`chips <chip>` as possible.
+    """
+
+    def __init__(
+        self,
+        dataset: GeoDataset,
+        size: Union[Tuple[float, float], float],
+        neighborhood: int,
+        batch_size: int,
+        length: int,
+        roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+        units: Units = Units.PIXELS,
+    ) -> None:
+        """Initialize a new Sampler instance.
+
+        The ``size`` argument can either be:
+
+        * a single ``float`` - in which case the same value is used for the height and
+          width dimension
+        * a ``tuple`` of two floats - in which case, the first *float* is used for the
+          height dimension, and the second *float* for the width dimension
+
+        Args:
+            dataset: dataset to index from
+            size: dimensions of each :term:`patch`
+            batch_size: number of samples per batch
+            length: number of samples per epoch
+            roi: region of interest to sample from (minx, maxx, miny, maxy, mint, maxt)
+                (defaults to the bounds of ``dataset.index``)
+            units: defines if ``size`` is in pixel or CRS units
+
+        .. versionchanged:: 0.3
+           Added ``units`` parameter, changed default to pixel units
+        """
+        super().__init__(dataset, roi)
+        self.size = _to_tuple(size)
+
+        if units == Units.PIXELS:
+            self.size = (self.size[0] * self.res, self.size[1] * self.res)
+
+        self.neighborhood = neighborhood
+        self.batch_size = batch_size
+        self.length = length
+        self.hits = []
+        areas = []
+        for hit in self.index.intersection(tuple(dataset.bounds), objects=True):
+            bounds = BoundingBox(*hit.bounds)
+            if (
+                bounds.maxx - bounds.minx >= self.size[1]
+                and bounds.maxy - bounds.miny >= self.size[0]
+            ):
+                self.hits.append(hit)
+                areas.append(bounds.area)
+
+        # torch.multinomial requires float probabilities > 0
+        self.areas = torch.tensor(areas, dtype=torch.float)
+        if torch.sum(self.areas) == 0:
+            self.areas += 1
+
+    def __iter__(self) -> Iterator[List[BoundingBox]]:
+        """Return the indices of a dataset.
+
+        Returns:
+            batch of (minx, maxx, miny, maxy, mint, maxt) coordinates to index a dataset
+        """
+        for _ in range(len(self)):
+            batch = []
+            for _ in range(self.batch_size):
+                # Choose a random tile, weighted by area
+                idx = torch.multinomial(self.areas, 1)
+                hit = self.hits[idx]
+                bounds = BoundingBox(*hit.bounds)
+
+                # Choose a random index within that tile
+                anchor_bbox = get_random_bounding_box(bounds, self.size, self.res)
+
+                mid_x, mid_y = (
+                    anchor_bbox.minx + (anchor_bbox.maxx - anchor_bbox.minx) / 2,
+                    anchor_bbox.miny + (anchor_bbox.maxy - anchor_bbox.miny) / 2,
+                )
+
+                # Neighborhood based on midpoint of anchor
+                # Contains positive midpoint => +/- half the patch size
+                neighborhood_bounds = BoundingBox(
+                    max(bounds.minx, mid_x - self.neighborhood - self.size[0] / 2),
+                    min(bounds.maxx, mid_x + self.neighborhood + self.size[0] / 2),
+                    max(bounds.miny, mid_y - self.neighborhood - self.size[1] / 2),
+                    min(bounds.maxy, mid_y + self.neighborhood + self.size[1] / 2),
+                    bounds.mint,
+                    bounds.maxt,
+                )
+
+                neighbor_bbox = get_random_bounding_box(
+                    neighborhood_bounds, self.size, self.res
+                )
+
+                # Choose another random tile, weighted by area
+                idx = torch.multinomial(self.areas, 1)
+                hit = self.hits[idx]
+                bounds = BoundingBox(*hit.bounds)
+
+                distant_bbox = get_random_bounding_box(bounds, self.size, self.res)
+                while distant_bbox in neighborhood_bounds:
+                    distant_bbox = get_random_bounding_box(bounds, self.size, self.res)
+
+                batch.append(anchor_bbox)
+                batch.append(neighbor_bbox)
+                batch.append(distant_bbox)
 
             yield batch
 
