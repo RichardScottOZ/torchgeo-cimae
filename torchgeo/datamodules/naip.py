@@ -16,8 +16,7 @@ from ..datasets import (
     stack_samples,
     stack_triplet_samples,
 )
-from ..samplers.batch import RandomBatchGeoSampler
-from ..samplers.single import GridGeoSampler, TripletGeoSampler
+from .utils import roi_split_half
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
@@ -192,6 +191,9 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         num_workers: int = 0,
         patch_size: int = 256,
         neighborhood: int = 100,
+        dataset_split: Callable[
+            ..., Sequence[Union[BoundingBox, Sequence[BoundingBox]]]
+        ] = roi_split_half,
         **kwargs: Any,
     ) -> None:
         """Initialize a LightningDataModule for NAIP and Chesapeake based DataLoaders.
@@ -210,6 +212,8 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.patch_size = patch_size
         self.neighborhood = neighborhood
+        self.dataset_split = dataset_split
+        self.pin_memory = pin_memory
 
     def naip_transform(self, sample: Dict[str, Any]) -> Dict[str, Any]:
         """Transform a single sample from the NAIP Dataset.
@@ -265,11 +269,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
 
         # TODO: figure out better train/val/test split
         roi = self.dataset.bounds
-        midx = roi.minx + (roi.maxx - roi.minx) / 2
-        midy = roi.miny + (roi.maxy - roi.miny) / 2
-        train_roi = BoundingBox(roi.minx, midx, roi.miny, roi.maxy, roi.mint, roi.maxt)
-        val_roi = BoundingBox(midx, roi.maxx, roi.miny, midy, roi.mint, roi.maxt)
-        test_roi = BoundingBox(roi.minx, roi.maxx, midy, roi.maxy, roi.mint, roi.maxt)
+        train_roi, val_roi, test_roi = self.dataset_split(roi, **self.kwargs)
 
         self.train_sampler = TripletGeoSampler(
             naip, self.patch_size, self.neighborhood, self.length, train_roi
