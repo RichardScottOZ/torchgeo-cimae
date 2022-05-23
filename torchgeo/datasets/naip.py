@@ -74,7 +74,7 @@ class NAIP(RasterDataset):
                 and returns a transformed version
             cache: if True, cache file handle to speed up repeated sampling
             area_of_interest: BoundingBox or Polygon of interest
-            date_range: Range of time to search in
+            date_range: Range of time to search in as string in format ``year-month-day/year-month-day``
             download: if True, download dataset and store it in the root directory
 
         Raises:
@@ -101,16 +101,15 @@ class NAIP(RasterDataset):
             return
 
         if self.date_range is None:
-            raise RuntimeError(
-                "`area_of_interest` specificed but no `date_range` provided."
-            )
+            self.date_range = "1990-01-01/2100-01-01"
 
         items = search_stac("naip", self.area_of_interest, self.date_range)
 
         for item in items:
             url = item.get_assets()["image"].href
+            filename = url.split("/")[-1]
 
-            if os.path.exists(os.path.join(self.root)):
+            if os.path.exists(os.path.join(self.root, filename)):
                 continue
 
             # Check if the user requested to download the dataset

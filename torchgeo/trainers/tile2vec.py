@@ -230,7 +230,7 @@ class Tile2VecTask(LightningModule):
                         "learning_rate_schedule_patience", 10
                     ),
                 ),
-                "monitor": "val_loss",
+                "monitor": "train_loss",
             },
         }
 

@@ -193,6 +193,8 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         dataset_split: Callable[
             ..., Sequence[Union[BoundingBox, Sequence[BoundingBox]]]
         ] = roi_split_half,
+        area_of_interest: Optional[BoundingBox] = None,
+        date_range: Optional[str] = None,
         pin_memory: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -215,6 +217,8 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         self.neighborhood = neighborhood
         self.dataset_split = dataset_split
         self.pin_memory = pin_memory
+        self.area_of_interest = area_of_interest
+        self.date_range = date_range
         self.kwargs = kwargs
 
     def naip_transform(self, sample: Dict[str, Any]) -> Dict[str, Any]:
@@ -253,6 +257,12 @@ class NAIPCDLDataModule(pl.LightningDataModule):
 
         This method is only called once per run.
         """
+        NAIP(
+            self.naip_root_dir,
+            area_of_interest=self.area_of_interest,
+            date_range=self.date_range,
+            download=False
+        )
         CDL(self.cdl_root_dir, download=False, checksum=False)
 
     def setup(self, stage: Optional[str] = None) -> None:
@@ -263,7 +273,10 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         Args:
             stage: state to set up
         """
-        naip = NAIP(self.naip_root_dir, transforms=self.naip_transform)
+        naip = NAIP(
+            self.naip_root_dir,
+            transforms=self.naip_transform
+        )
         cdl = CDL(self.cdl_root_dir, naip.crs, naip.res, transforms=self.cdl_transform)
 
         self.dataset = naip & cdl
