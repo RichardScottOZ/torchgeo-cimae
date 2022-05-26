@@ -265,9 +265,9 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             self.naip_root_dir,
             area_of_interest=self.area_of_interest,
             date_range=self.date_range,
-            download=False
+            download=False,
         )
-        CDL(self.cdl_root_dir, download=False, checksum=False)
+        # CDL(self.cdl_root_dir, download=False, checksum=False)
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Initialize the main ``Dataset`` objects.
@@ -283,9 +283,9 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             cache=self.cache,
             cache_size=self.cache_size,
         )
-        cdl = CDL(self.cdl_root_dir, naip.crs, naip.res, transforms=self.cdl_transform)
+        # cdl = CDL(self.cdl_root_dir, naip.crs, naip.res, transforms=self.cdl_transform)
 
-        self.dataset = naip & cdl
+        self.dataset = naip  # & cdl
 
         # TODO: figure out better train/val/test split
         roi = self.dataset.bounds
@@ -299,9 +299,11 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             self.length,
             train_roi,
         )
+
         self.val_sampler = GridGeoSampler(
             naip, self.patch_size, self.patch_size, val_roi
         )
+
         self.test_sampler = GridGeoSampler(
             naip, self.patch_size, self.patch_size, test_roi
         )
