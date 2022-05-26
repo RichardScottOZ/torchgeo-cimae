@@ -27,7 +27,7 @@ def triplet_loss(
     neighbor: Tensor,
     distant: Tensor,
     margin: float = 0.1,
-    regularize: bool = True,
+    l2: float = 0,
 ) -> Tensor:
     """Computes the triplet_loss between anchor, neighbor, and distant.
 
@@ -43,14 +43,16 @@ def triplet_loss(
     negative = torch.sqrt(((anchor - distant) ** 2).sum(dim=1))
 
     distance = positive - negative + margin
-    loss = torch.relu(distance).mean()
+    loss = torch.nn.functional.relu(distance, inplace=True).mean()
 
-    if regularize:
-        loss += (
-            torch.linalg.norm(anchor)
-            + torch.linalg.norm(neighbor)
-            + torch.linalg.norm(distant)
-        )
+    if l2 != 0:
+        anchor_norm = torch.linalg.norm(anchor, dim=1)
+        neighbor_norm = torch.linalg.norm(neighbor, dim=1)
+        distant_norm = torch.linalg.norm(distant, dim=1)
+
+        norm = l2 * (anchor_norm + neighbor_norm + distant_norm).mean()
+
+        loss += norm
 
     return loss
 
@@ -147,19 +149,19 @@ class Tile2VecTask(LightningModule):
 
     def config_task(self) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
-        pretrained = self.hyperparams["imagenet_pretraining"]
+        pretrained = self.hyperparams.get("imagenet_pretraining", False)
         encoder = None
 
         if self.hyperparams["encoder_name"] == "resnet18":
             encoder = resnet18(
                 sensor=self.hyperparams["sensor"],
-                bands=self.hyperparams["bands"],
+                bands=self.hyperparams.get("bands", "all"),
                 pretrained=pretrained,
             )
         elif self.hyperparams["encoder_name"] == "resnet50":
             encoder = resnet50(
                 sensor=self.hyperparams["sensor"],
-                bands=self.hyperparams["bands"],
+                bands=self.hyperparams.get("bands", "all"),
                 pretrained=pretrained,
             )
         else:
@@ -226,9 +228,7 @@ class Tile2VecTask(LightningModule):
             "lr_scheduler": {
                 "scheduler": ReduceLROnPlateau(
                     optimizer,
-                    patience=self.hyperparams.get(
-                        "learning_rate_schedule_patience", 10
-                    ),
+                    patience=self.hyperparams.get("learning_rate_schedule_patience", 0),
                 ),
                 "monitor": "train_loss",
             },
@@ -257,7 +257,13 @@ class Tile2VecTask(LightningModule):
             self.forward(distant),
         )
 
-        loss = triplet_loss(pred1, pred2, pred3)
+        loss = triplet_loss(
+            pred1,
+            pred2,
+            pred3,
+            self.hyperparams.get("margin", 0.1),
+            self.hyperparams.get("l2", 0),
+        )
 
         self.log("train_loss", loss, on_step=True, on_epoch=False)
 
@@ -282,7 +288,13 @@ class Tile2VecTask(LightningModule):
             self.forward(distant),
         )
 
-        loss = triplet_loss(pred1, pred2, pred3)
+        loss = triplet_loss(
+            pred1,
+            pred2,
+            pred3,
+            self.hyperparams.get("margin", 0.1),
+            self.hyperparams.get("l2", 0),
+        )
 
         self.log("val_loss", loss, on_step=False, on_epoch=True)
 
