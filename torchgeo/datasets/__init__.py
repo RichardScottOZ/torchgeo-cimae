@@ -90,6 +90,7 @@ from .ucmerced import UCMerced
 from .usavars import USAVars
 from .utils import (
     BoundingBox,
+    create_bounding_box,
     concat_samples,
     merge_samples,
     search_stac,
@@ -190,6 +191,7 @@ __all__ = (
     "VisionClassificationDataset",
     # Utilities
     "BoundingBox",
+    "create_bounding_box",
     "concat_samples",
     "merge_samples",
     "stack_samples",

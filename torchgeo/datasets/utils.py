@@ -402,6 +402,34 @@ class BoundingBox:
         )
 
 
+def create_bounding_box(
+    minx: float,
+    maxx: float,
+    miny: float,
+    maxy: float,
+    mint: Union[float, str],
+    maxt: Union[float, str],
+    date_format: str = "%Y%m%d",
+) -> BoundingBox:
+    if isinstance(mint, str):
+        try:
+            mint, _ = disambiguate_timestamp(mint, date_format)
+        except ValueError:
+            raise ValueError(
+                f"Date string or date format invalid: 'mint={mint}' or 'date_format={date_format}'"
+            )
+
+    if isinstance(maxt, str):
+        try:
+            _, maxt = disambiguate_timestamp(maxt, date_format)
+        except Exception:
+            raise ValueError(
+                f"Date string or date format invalid: 'maxt={maxt}' or 'date_format={date_format}'"
+            )
+
+    return BoundingBox(minx, maxx, miny, maxy, mint, maxt)
+
+
 def disambiguate_timestamp(date_str: str, format: str) -> Tuple[float, float]:
     """Disambiguate partial timestamps.
 
