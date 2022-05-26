@@ -195,6 +195,8 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         ] = roi_split_half,
         area_of_interest: Optional[BoundingBox] = None,
         date_range: Optional[str] = None,
+        cache: bool = True,
+        cache_size: int = 128,
         pin_memory: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -219,6 +221,8 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         self.pin_memory = pin_memory
         self.area_of_interest = area_of_interest
         self.date_range = date_range
+        self.cache = cache
+        self.cache_size = cache_size
         self.kwargs = kwargs
 
     def naip_transform(self, sample: Dict[str, Any]) -> Dict[str, Any]:
@@ -275,7 +279,9 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         """
         naip = NAIP(
             self.naip_root_dir,
-            transforms=self.naip_transform
+            transforms=self.naip_transform,
+            cache=self.cache,
+            cache_size=self.cache_size,
         )
         cdl = CDL(self.cdl_root_dir, naip.crs, naip.res, transforms=self.cdl_transform)
 

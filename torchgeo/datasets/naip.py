@@ -58,6 +58,7 @@ class NAIP(RasterDataset):
         res: Optional[float] = None,
         transforms: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
         cache: bool = True,
+        cache_size: int = 128,
         area_of_interest: Optional[Union[BoundingBox, Polygon]] = None,
         date_range: Optional[str] = None,
         download: bool = True,
@@ -88,7 +89,7 @@ class NAIP(RasterDataset):
 
         self._verify()
 
-        super().__init__(root, crs, res, transforms, cache)
+        super().__init__(root, crs, res, transforms, cache, cache_size)
 
     def _verify(self) -> None:
         """Verify the integrity of the dataset.

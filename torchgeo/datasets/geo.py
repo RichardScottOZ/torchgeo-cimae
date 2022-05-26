@@ -312,6 +312,7 @@ class RasterDataset(GeoDataset):
         res: Optional[float] = None,
         transforms: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
         cache: bool = True,
+        cache_size: int = 128,
     ) -> None:
         """Initialize a new Dataset instance.
 
@@ -332,6 +333,9 @@ class RasterDataset(GeoDataset):
 
         self.root = root
         self.cache = cache
+        self._cached_load_warp_file = functools.lru_cache(maxsize=cache_size)(
+            self._load_warp_file
+        )
 
         # Populate the dataset index
         i = 0
@@ -466,18 +470,6 @@ class RasterDataset(GeoDataset):
 
         tensor = torch.tensor(dest)
         return tensor
-
-    @functools.lru_cache(maxsize=128)
-    def _cached_load_warp_file(self, filepath: str) -> DatasetReader:
-        """Cached version of :meth:`_load_warp_file`.
-
-        Args:
-            filepath: file to load and warp
-
-        Returns:
-            file handle of warped VRT
-        """
-        return self._load_warp_file(filepath)
 
     def _load_warp_file(self, filepath: str) -> DatasetReader:
         """Load and warp a file to the correct CRS and resolution.
