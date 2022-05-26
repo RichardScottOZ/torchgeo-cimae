@@ -16,7 +16,11 @@ from ..datasets import (
     stack_samples,
     stack_triplet_samples,
 )
-from ..samplers.batch import RandomBatchGeoSampler, TripletBatchGeoSampler
+from ..samplers.batch import (
+    RandomBatchGeoSampler,
+    TripletBatchGeoSampler,
+    TripletTileBatchGeoSampler,
+)
 from ..samplers.single import GridGeoSampler
 from .utils import roi_split_half
 

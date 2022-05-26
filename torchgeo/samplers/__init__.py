@@ -3,7 +3,12 @@
 
 """TorchGeo samplers."""
 
-from .batch import BatchGeoSampler, RandomBatchGeoSampler, TripletBatchGeoSampler
+from .batch import (
+    BatchGeoSampler,
+    RandomBatchGeoSampler,
+    TripletBatchGeoSampler,
+    TripletTileBatchGeoSampler,
+)
 from .constants import Units
 from .single import GeoSampler, GridGeoSampler, PreChippedGeoSampler, RandomGeoSampler
 
@@ -15,6 +20,7 @@ __all__ = (
     # Batch samplers
     "RandomBatchGeoSampler",
     "TripletBatchGeoSampler",
+    "TripletTileBatchGeoSampler",
     # Base classes
     "GeoSampler",
     "BatchGeoSampler",
