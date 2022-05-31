@@ -7,10 +7,11 @@ from typing import Any, Dict, Optional, Tuple, cast
 
 import torch
 from kornia import augmentation as K
+from kornia.augmentation.container.image import ImageSequential
 from kornia.geometry.transform import Rotate
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
-from torch.nn.modules import BatchNorm1d, Conv2d, Linear, Module, ReLU, Sequential
+from torch.nn.modules import Module, Sequential
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from torchgeo.models import resnet18, resnet50
@@ -68,7 +69,11 @@ class Augmentations(Module):
     https://arxiv.org/pdf/2002.05709.pdf for more details.
     """
 
-    def __init__(self, image_size: Tuple[int, int] = (256, 256)) -> None:
+    def __init__(
+        self,
+        image_size: Tuple[int, int] = (256, 256),
+        device: torch.device = torch.device("cpu"),
+    ) -> None:
         """Initialize a module for applying SimCLR augmentations.
 
         Args:
@@ -80,13 +85,14 @@ class Augmentations(Module):
         self.augmentation = Sequential(
             K.Resize(size=image_size, align_corners=False),
             K.RandomHorizontalFlip(),
-            # ImageSequential(
-            #     Rotate(torch.tensor([0])),
-            #     Rotate(torch.tensor([90])),
-            #     Rotate(torch.tensor([180])),
-            #     Rotate(torch.tensor([270])),
-            #     random_apply=1
-            # )
+            ImageSequential(
+                Rotate(torch.tensor([0.0], device=device)),
+                Rotate(torch.tensor([90.0], device=device)),
+                Rotate(torch.tensor([180.0], device=device)),
+                Rotate(torch.tensor([270.0], device=device)),
+                random_apply=1,
+                same_on_batch=True,
+            ),
         )
 
     def forward(self, x: Tensor) -> Tensor:
@@ -112,6 +118,7 @@ class Tile2Vec(Module):
         self,
         model: Module,
         image_size: Tuple[int, int] = (256, 256),
+        device: torch.device = torch.device("cpu"),
         augment_fn: Optional[Module] = None,
         **kwargs: Any,
     ) -> None:
@@ -126,7 +133,7 @@ class Tile2Vec(Module):
 
         self.augment: Module
         if augment_fn is None:
-            self.augment = Augmentations(image_size)
+            self.augment = Augmentations(image_size, device)
         else:
             self.augment = augment_fn
 
@@ -147,8 +154,35 @@ class Tile2Vec(Module):
 class Tile2VecTask(LightningModule):
     """Class for pre-training any PyTorch model using Tile2Vec."""
 
-    def config_task(self) -> None:
+    def __init__(self, **kwargs: Any) -> None:
+        """Initialize a LightningModule for pre-training a model with Tile2Vec.
+
+        Keyword Args:
+            sensor: type of sensor
+            bands: which bands of sensor
+            encoder_name: either "resnet18" or "resnet50"
+            imagenet_pretraining: bool indicating whether to use imagenet pretrained
+                weights
+
+        Raises:
+            ValueError: if kwargs arguments are invalid
+        """
+        super().__init__()
+
+        # Creates `self.hparams` from kwargs
+        self.save_hyperparameters()  # type: ignore[operator]
+        self.hyperparams = cast(Dict[str, Any], self.hparams)
+
+    def setup(self, stage: Optional[str] = None) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
+        # See https://github.com/PyTorchLightning/pytorch-lightning/issues/13108
+        # current workaround
+        if self.trainer is not None:
+            if self.trainer.strategy.root_device.type == "cpu":
+                device = torch.device("cpu")
+            else:
+                device = torch.device("cuda")
+
         pretrained = self.hyperparams.get("imagenet_pretraining", False)
         encoder = None
 
@@ -174,28 +208,7 @@ class Tile2VecTask(LightningModule):
         image_size = self.hyperparams.get("image_size", (256, 256))
         image_size = _to_tuple(image_size)
 
-        self.model = Tile2Vec(encoder, image_size=image_size)
-
-    def __init__(self, **kwargs: Any) -> None:
-        """Initialize a LightningModule for pre-training a model with Tile2Vec.
-
-        Keyword Args:
-            sensor: type of sensor
-            bands: which bands of sensor
-            encoder_name: either "resnet18" or "resnet50"
-            imagenet_pretraining: bool indicating whether to use imagenet pretrained
-                weights
-
-        Raises:
-            ValueError: if kwargs arguments are invalid
-        """
-        super().__init__()
-
-        # Creates `self.hparams` from kwargs
-        self.save_hyperparameters()  # type: ignore[operator]
-        self.hyperparams = cast(Dict[str, Any], self.hparams)
-
-        self.config_task()
+        self.model = Tile2Vec(encoder, image_size=image_size, device=device)
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         """Forward pass of the model.
