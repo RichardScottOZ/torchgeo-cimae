@@ -21,6 +21,11 @@ from ..samplers.batch import (
     TripletBatchGeoSampler,
     TripletTileBatchGeoSampler,
 )
+from ..samplers.block import (
+    RandomBlockBatchGeoSampler,
+    TripletBlockBatchGeoSampler,
+    TripletTileBlockBatchGeoSampler,
+)
 from ..samplers.single import GridGeoSampler
 from .utils import roi_split_half
 
@@ -202,6 +207,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         cache: bool = True,
         cache_size: int = 128,
         pin_memory: bool = False,
+        block_size: int = 128,
         **kwargs: Any,
     ) -> None:
         """Initialize a LightningDataModule for NAIP and Chesapeake based DataLoaders.
@@ -227,6 +233,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         self.date_range = date_range
         self.cache = cache
         self.cache_size = cache_size
+        self.block_size = block_size
         self.kwargs = kwargs
 
     def naip_transform(self, sample: Dict[str, Any]) -> Dict[str, Any]:
@@ -291,25 +298,37 @@ class NAIPCDLDataModule(pl.LightningDataModule):
 
         self.dataset = naip  # & cdl
 
-        # TODO: figure out better train/val/test split
         roi = self.dataset.bounds
         train_roi, val_roi, test_roi = self.dataset_split(roi, **self.kwargs)
 
-        self.train_sampler = TripletBatchGeoSampler(
+        self.train_sampler = TripletTileBlockBatchGeoSampler(
             naip,
             self.patch_size,
             self.neighborhood,
             self.batch_size,
             self.length,
             train_roi,
+            block_size=self.block_size,
         )
 
-        self.val_sampler = GridGeoSampler(
-            naip, self.patch_size, self.patch_size, val_roi
+        self.val_sampler = TripletTileBlockBatchGeoSampler(
+            naip,
+            self.patch_size,
+            self.neighborhood,
+            self.batch_size,
+            self.length,
+            val_roi,
+            block_size=self.block_size,
         )
 
-        self.test_sampler = GridGeoSampler(
-            naip, self.patch_size, self.patch_size, test_roi
+        self.test_sampler = TripletTileBlockBatchGeoSampler(
+            naip,
+            self.patch_size,
+            self.neighborhood,
+            self.batch_size,
+            self.length,
+            test_roi,
+            block_size=self.block_size,
         )
 
     def train_dataloader(self) -> DataLoader[Any]:
@@ -334,10 +353,9 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         """
         return DataLoader(
             self.dataset,
-            batch_size=self.batch_size,
-            sampler=self.val_sampler,
+            batch_sampler=self.val_sampler,
             num_workers=self.num_workers,
-            collate_fn=stack_samples,
+            collate_fn=stack_triplet_samples,
             pin_memory=self.pin_memory,
         )
 
@@ -349,9 +367,8 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         """
         return DataLoader(
             self.dataset,
-            batch_size=self.batch_size,
-            sampler=self.test_sampler,
+            batch_sampler=self.test_sampler,
             num_workers=self.num_workers,
-            collate_fn=stack_samples,
+            collate_fn=stack_triplet_samples,
             pin_memory=self.pin_memory,
         )

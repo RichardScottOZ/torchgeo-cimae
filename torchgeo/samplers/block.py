@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-"""TorchGeo batch samplers."""
+"""TorchGeo block batch samplers."""
 
 import abc
 from typing import Iterator, List, Optional, Sequence, Tuple, Union
@@ -12,14 +12,22 @@ from torch.utils.data import Sampler
 
 from ..datasets import BoundingBox, GeoDataset
 from .constants import Units
-from .utils import _to_tuple, get_random_bounding_box
+from .utils import (
+    _to_tuple,
+    get_random_bounding_box,
+    get_random_bounding_box_from_grid,
+    get_bounds_from_grid,
+)
+from math import ceil, floor
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
 Sampler.__module__ = "torch.utils.data"
 
 
-class BatchGeoSampler(Sampler[List[Tuple[str, BoundingBox, BoundingBox]]], abc.ABC):
+class BlockBatchGeoSampler(
+    Sampler[List[Tuple[str, BoundingBox, BoundingBox]]], abc.ABC
+):
     """Abstract base class for sampling from :class:`~torchgeo.datasets.GeoDataset`.
 
     Unlike PyTorch's :class:`~torch.utils.data.BatchSampler`, :class:`BatchGeoSampler`
@@ -32,6 +40,7 @@ class BatchGeoSampler(Sampler[List[Tuple[str, BoundingBox, BoundingBox]]], abc.A
         self,
         dataset: GeoDataset,
         roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+        block_size: int = 128,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -51,7 +60,23 @@ class BatchGeoSampler(Sampler[List[Tuple[str, BoundingBox, BoundingBox]]], abc.A
             for region in roi:
                 hits = dataset.index.intersection(tuple(region), objects=True)
                 for hit in hits:
-                    bbox = BoundingBox(*hit.bounds) & region
+                    bounds = BoundingBox(*hit.bounds)
+                    minx = bounds.minx + block_size * ceil(
+                        (region.minx - bounds.minx) / block_size
+                    )
+                    maxx = minx + block_size * floor((region.maxx - minx) / block_size)
+                    miny = bounds.miny + block_size * ceil(
+                        (region.miny - bounds.miny) / block_size
+                    )
+                    maxy = miny + block_size * floor((region.maxy - miny) / block_size)
+
+                    region_block = BoundingBox(
+                        minx, maxx, miny, maxy, region.mint, region.maxt
+                    )
+                    try:
+                        bbox = bounds & region_block
+                    except ValueError:
+                        continue
                     self.index.insert(hit.id, tuple(bbox), hit.object)
 
         self.res = dataset.res
@@ -66,7 +91,7 @@ class BatchGeoSampler(Sampler[List[Tuple[str, BoundingBox, BoundingBox]]], abc.A
         """
 
 
-class RandomBatchGeoSampler(BatchGeoSampler):
+class RandomBlockBatchGeoSampler(BlockBatchGeoSampler):
     """Samples batches of elements from a region of interest randomly.
 
     This is particularly useful during training when you want to maximize the size of
@@ -81,6 +106,7 @@ class RandomBatchGeoSampler(BatchGeoSampler):
         length: int,
         roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
         units: Units = Units.PIXELS,
+        block_size: int = 128,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -103,11 +129,16 @@ class RandomBatchGeoSampler(BatchGeoSampler):
         .. versionchanged:: 0.3
            Added ``units`` parameter, changed default to pixel units
         """
-        super().__init__(dataset, roi)
+        super().__init__(dataset, roi, block_size)
         self.size = _to_tuple(size)
+        self.block_size = _to_tuple(block_size)
 
         if units == Units.PIXELS:
             self.size = (self.size[0] * self.res, self.size[1] * self.res)
+            self.block_size = (
+                self.block_size[0] * self.res,
+                self.block_size[1] * self.res,
+            )
 
         self.batch_size = batch_size
         self.length = length
@@ -134,17 +165,18 @@ class RandomBatchGeoSampler(BatchGeoSampler):
             batch of (minx, maxx, miny, maxy, mint, maxt) coordinates to index a dataset
         """
         for _ in range(len(self)):
-            # Choose a random tile, weighted by area
+            # Choose random indices within that tile
             idx = torch.multinomial(self.areas, 1)
             hit = self.hits[idx]
             bounds = BoundingBox(*hit.bounds)
 
-            # Choose random indices within that tile
             batch = []
             for _ in range(self.batch_size):
-
-                bounding_box = get_random_bounding_box(bounds, self.size, self.res)
-                batch.append((hit.object, hit.bounds, bounding_box))
+                # Choose a random tile, weighted by area
+                bounding_box = get_random_bounding_box_from_grid(
+                    bounds, self.size, self.block_size
+                )
+                batch.append((hit.object, BoundingBox(*hit.bounds), bounding_box))
 
             yield batch
 
@@ -157,7 +189,7 @@ class RandomBatchGeoSampler(BatchGeoSampler):
         return self.length // self.batch_size
 
 
-class TripletBatchGeoSampler(BatchGeoSampler):
+class TripletBlockBatchGeoSampler(BlockBatchGeoSampler):
     """Samples batches of elements from a region of interest randomly.
 
     This is particularly useful during training when you want to maximize the size of
@@ -173,6 +205,7 @@ class TripletBatchGeoSampler(BatchGeoSampler):
         length: int,
         roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
         units: Units = Units.PIXELS,
+        block_size: Union[Tuple[float, float], float] = 128,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -197,10 +230,15 @@ class TripletBatchGeoSampler(BatchGeoSampler):
         """
         super().__init__(dataset, roi)
         self.size = _to_tuple(size)
+        self.block_size = _to_tuple(block_size)
         self.neighborhood = _to_tuple(neighborhood)
 
         if units == Units.PIXELS:
             self.size = (self.size[0] * self.res, self.size[1] * self.res)
+            self.block_size = (
+                self.block_size[0] * self.res,
+                self.block_size[1] * self.res,
+            )
             self.neighborhood = (
                 self.neighborhood[0] * self.res,
                 self.neighborhood[1] * self.res,
@@ -241,8 +279,8 @@ class TripletBatchGeoSampler(BatchGeoSampler):
                 anchor_bounds = BoundingBox(*anchor_hit.bounds)
 
                 # Choose a random index within that tile
-                anchor_bbox = get_random_bounding_box(
-                    anchor_bounds, self.size, self.res
+                anchor_bbox = get_random_bounding_box_from_grid(
+                    anchor_bounds, self.size, self.block_size
                 )
 
                 mid_x = anchor_bbox.minx + (anchor_bbox.maxx - anchor_bbox.minx) / 2
@@ -271,15 +309,22 @@ class TripletBatchGeoSampler(BatchGeoSampler):
                     anchor_bounds.maxt,
                 )
 
-                neighbor_bbox = get_random_bounding_box(
-                    neighborhood_bounds, self.size, self.res
+                neighborhood_block_bounds = get_bounds_from_grid(
+                    anchor_bounds, neighborhood_bounds, self.size, self.block_size
+                )
+
+                neighbor_bbox = get_random_bounding_box_from_grid(
+                    neighborhood_block_bounds,
+                    self.size,
+                    self.block_size,
+                    neighborhood_bounds,
                 )
 
                 distant_hit = self.hits[distant_idx]
                 distant_bounds = BoundingBox(*distant_hit.bounds)
 
-                distant_bbox = get_random_bounding_box(
-                    distant_bounds, self.size, self.res
+                distant_bbox = get_random_bounding_box_from_grid(
+                    distant_bounds, self.size, self.block_size
                 )
 
                 for _ in range(3):
@@ -290,8 +335,8 @@ class TripletBatchGeoSampler(BatchGeoSampler):
                     distant_hit = self.hits[distant_idx]
                     distant_bounds = BoundingBox(*distant_hit.bounds)
 
-                    distant_bbox = get_random_bounding_box(
-                        distant_bounds, self.size, self.res
+                    distant_bbox = get_random_bounding_box_from_grid(
+                        distant_bounds, self.size, self.block_size
                     )
 
                 batch.append(
@@ -315,7 +360,7 @@ class TripletBatchGeoSampler(BatchGeoSampler):
         return self.length // self.batch_size
 
 
-class TripletTileBatchGeoSampler(BatchGeoSampler):
+class TripletTileBlockBatchGeoSampler(BlockBatchGeoSampler):
     """Samples batches of elements from a region of interest randomly.
 
     This is particularly useful during training when you want to maximize the size of
@@ -331,6 +376,7 @@ class TripletTileBatchGeoSampler(BatchGeoSampler):
         length: int,
         roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
         units: Units = Units.PIXELS,
+        block_size: int = 128,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -355,10 +401,15 @@ class TripletTileBatchGeoSampler(BatchGeoSampler):
         """
         super().__init__(dataset, roi)
         self.size = _to_tuple(size)
+        self.block_size = _to_tuple(block_size)
         self.neighborhood = _to_tuple(neighborhood)
 
         if units == Units.PIXELS:
             self.size = (self.size[0] * self.res, self.size[1] * self.res)
+            self.block_size = (
+                self.block_size[0] * self.res,
+                self.block_size[1] * self.res,
+            )
             self.neighborhood = (
                 self.neighborhood[0] * self.res,
                 self.neighborhood[1] * self.res,
@@ -389,23 +440,19 @@ class TripletTileBatchGeoSampler(BatchGeoSampler):
             batch of (minx, maxx, miny, maxy, mint, maxt) coordinates to index a dataset
         """
         for _ in range(len(self)):
-            batch = []
-
             # Choose a random tile, weighted by area
-            anchor_idx, distant_idx = torch.multinomial(
-                self.areas, 2, replacement=False
-            )
-
+            anchor_idx, distant_idx = torch.multinomial(self.areas, 2, replacement=True)
             anchor_hit = self.hits[anchor_idx]
             anchor_bounds = BoundingBox(*anchor_hit.bounds)
 
             distant_hit = self.hits[distant_idx]
             distant_bounds = BoundingBox(*distant_hit.bounds)
 
+            batch = []
             for _ in range(self.batch_size):
                 # Choose a random index within that tile
-                anchor_bbox = get_random_bounding_box(
-                    anchor_bounds, self.size, self.res
+                anchor_bbox = get_random_bounding_box_from_grid(
+                    anchor_bounds, self.size, self.block_size
                 )
 
                 mid_x = anchor_bbox.minx + (anchor_bbox.maxx - anchor_bbox.minx) / 2
@@ -434,12 +481,19 @@ class TripletTileBatchGeoSampler(BatchGeoSampler):
                     anchor_bounds.maxt,
                 )
 
-                neighbor_bbox = get_random_bounding_box(
-                    neighborhood_bounds, self.size, self.res
+                neighborhood_block_bounds = get_bounds_from_grid(
+                    anchor_bounds, neighborhood_bounds, self.size, self.block_size
                 )
 
-                distant_bbox = get_random_bounding_box(
-                    distant_bounds, self.size, self.res
+                neighbor_bbox = get_random_bounding_box_from_grid(
+                    neighborhood_block_bounds,
+                    self.size,
+                    self.block_size,
+                    neighborhood_bounds,
+                )
+
+                distant_bbox = get_random_bounding_box_from_grid(
+                    distant_bounds, self.size, self.block_size
                 )
 
                 for _ in range(3):
@@ -450,8 +504,8 @@ class TripletTileBatchGeoSampler(BatchGeoSampler):
                     distant_hit = self.hits[distant_idx]
                     distant_bounds = BoundingBox(*distant_hit.bounds)
 
-                    distant_bbox = get_random_bounding_box(
-                        distant_bounds, self.size, self.res
+                    distant_bbox = get_random_bounding_box_from_grid(
+                        distant_bounds, self.size, self.block_size
                     )
 
                 batch.append(

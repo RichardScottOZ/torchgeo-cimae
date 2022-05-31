@@ -28,7 +28,7 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torchvision.datasets import ImageFolder
 from torchvision.datasets.folder import default_loader as pil_loader
-
+from rtree.index import Item
 from .utils import BoundingBox, concat_samples, disambiguate_timestamp, merge_samples
 
 # https://github.com/pytorch/pytorch/issues/60979
@@ -109,7 +109,9 @@ class GeoDataset(Dataset[Dict[str, Any]], abc.ABC):
         self.index = Index(interleaved=False, properties=Property(dimension=3))
 
     @abc.abstractmethod
-    def __getitem__(self, query: BoundingBox) -> Dict[str, Any]:
+    def __getitem__(
+        self, query: Tuple[str, BoundingBox, BoundingBox]
+    ) -> Dict[str, Any]:
         """Retrieve image/mask and metadata indexed by query.
 
         Args:
@@ -313,6 +315,7 @@ class RasterDataset(GeoDataset):
         transforms: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
         cache: bool = True,
         cache_size: int = 128,
+        intersect: bool = False,
     ) -> None:
         """Initialize a new Dataset instance.
 
@@ -336,6 +339,7 @@ class RasterDataset(GeoDataset):
         self._cached_load_warp_file = functools.lru_cache(maxsize=cache_size)(
             self._load_warp_file
         )
+        self.intersect = intersect
 
         # Populate the dataset index
         i = 0
@@ -382,7 +386,9 @@ class RasterDataset(GeoDataset):
         self._crs = cast(CRS, crs)
         self.res = cast(float, res)
 
-    def __getitem__(self, query: BoundingBox) -> Dict[str, Any]:
+    def __getitem__(
+        self, t_query: Tuple[str, BoundingBox, BoundingBox]
+    ) -> Dict[str, Any]:
         """Retrieve image/mask and metadata indexed by query.
 
         Args:
@@ -394,8 +400,13 @@ class RasterDataset(GeoDataset):
         Raises:
             IndexError: if query is not found in the index
         """
-        hits = self.index.intersection(tuple(query), objects=True)
-        filepaths = [hit.object for hit in hits]
+        filepaths = [t_query[0]]
+        bounds = t_query[1]
+        query = t_query[2]
+
+        if self.intersect or query not in bounds:
+            hits = [hit for hit in self.index.intersection(tuple(query), objects=True)]
+            filepaths = [hit.object for hit in hits]
 
         if not filepaths:
             raise IndexError(

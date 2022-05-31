@@ -11,6 +11,11 @@ from .batch import (
 )
 from .constants import Units
 from .single import GeoSampler, GridGeoSampler, PreChippedGeoSampler, RandomGeoSampler
+from .block import (
+    RandomBlockBatchGeoSampler,
+    TripletBlockBatchGeoSampler,
+    TripletTileBlockBatchGeoSampler,
+)
 
 __all__ = (
     # Samplers
@@ -26,6 +31,10 @@ __all__ = (
     "BatchGeoSampler",
     # Constants
     "Units",
+    # Block
+    "RandomBlockBatchGeoSampler",
+    "TripletBlockBatchGeoSampler",
+    "TripletTileBlockBatchGeoSampler",
 )
 
 # https://stackoverflow.com/questions/40018681

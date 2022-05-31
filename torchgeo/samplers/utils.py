@@ -3,9 +3,10 @@
 
 """Common sampler utilities."""
 
-from typing import Tuple, Union
+from typing import Tuple, Union, Any, Sequence, Optional
 
 import torch
+from math import floor
 
 from ..datasets import BoundingBox
 
@@ -66,3 +67,116 @@ def get_random_bounding_box(
 
     query = BoundingBox(minx, maxx, miny, maxy, mint, maxt)
     return query
+
+
+def get_random_bounding_box_from_grid(
+    block_bounds: BoundingBox,
+    size: Union[Tuple[float, float], float],
+    block_size: Union[Tuple[float, float], float],
+    bounds: Optional[BoundingBox] = None,
+) -> BoundingBox:
+    """Returns a random bounding box within a given bounding box.
+
+    The ``size`` argument can either be:
+
+        * a single ``float`` - in which case the same value is used for the height and
+          width dimension
+        * a ``tuple`` of two floats - in which case, the first *float* is used for the
+          height dimension, and the second *float* for the width dimension
+
+    Args:
+        bounds: the larger bounding box to sample from
+        size: the size of the bounding box to sample
+
+    Returns:
+        randomly sampled bounding box from the extent of the input
+    """
+    t_size = _to_tuple(size)
+    t_block_size = _to_tuple(block_size)
+
+    if t_size > t_block_size:
+        raise ValueError("Size is larger than block size.")
+
+    rands = torch.rand(4).numpy()
+
+    num_blocks_x = max(
+        ((block_bounds.maxx - block_bounds.minx) // t_block_size[0]) - 1, 0
+    )
+    num_blocks_y = max(
+        ((block_bounds.maxy - block_bounds.miny) // t_block_size[1]) - 1, 0
+    )
+
+    block_offset_x = floor(rands[0] * num_blocks_x)
+    block_offset_y = floor(rands[1] * num_blocks_y)
+    minx = block_bounds.minx + block_offset_x * t_block_size[0]
+    maxy = block_bounds.maxy - block_offset_y * t_block_size[1]
+
+    if bounds is not None:
+        block = BoundingBox(
+            minx,
+            minx + t_block_size[0],
+            maxy - t_block_size[1],
+            maxy,
+            block_bounds.mint,
+            block_bounds.maxt,
+        )
+        block_bounds = block & bounds
+        t_block_size = (
+            block_bounds.maxx - block_bounds.minx,
+            block_bounds.maxy - block_bounds.miny,
+        )
+
+        minx = block_bounds.minx
+        maxy = block_bounds.maxy
+
+    minx += rands[2] * (t_block_size[0] - t_size[0])
+    maxy -= rands[3] * (t_block_size[1] - t_size[1])
+    maxx = minx + t_size[0]
+    miny = maxy - t_size[1]
+
+    query = BoundingBox(minx, maxx, miny, maxy, block_bounds.mint, block_bounds.maxt)
+    return query
+
+
+def get_bounds_from_grid(
+    bounds: BoundingBox,
+    bounding_box: BoundingBox,
+    size: Union[Tuple[float, float], float],
+    block_size: Union[Tuple[float, float], float],
+) -> BoundingBox:
+    """get_bounds_from_grid."""
+    t_size = _to_tuple(size)
+    t_block_size = _to_tuple(block_size)
+
+    minx = (
+        bounds.minx
+        + floor((bounding_box.minx - bounds.minx) / t_block_size[0]) * t_block_size[0]
+    )
+
+    maxy = (
+        bounds.maxy
+        - floor((bounds.maxy - bounding_box.maxy) / t_block_size[1]) * t_block_size[1]
+    )
+
+    maxx = (
+        bounds.maxx
+        - floor((bounds.maxx - bounding_box.maxx) / t_block_size[0]) * t_block_size[0]
+    )
+    miny = (
+        bounds.miny
+        + floor((bounding_box.miny - bounds.miny) / t_block_size[1]) * t_block_size[1]
+    )
+
+    if minx != bounds.minx and bounding_box.minx - minx < t_size[0]:
+        minx += t_block_size[0]
+
+    if maxx != bounds.maxx and maxx - bounding_box.maxx < t_size[0]:
+        maxx -= t_block_size[0]
+
+    if miny != bounds.miny and bounding_box.miny - miny < t_size[1]:
+        miny += t_block_size[1]
+
+    if maxy != bounds.maxy and maxy - bounding_box.maxy < t_size[1]:
+        maxy -= t_block_size[1]
+
+    return BoundingBox(minx, maxx, miny, maxy, bounding_box.mint, bounding_box.maxt)

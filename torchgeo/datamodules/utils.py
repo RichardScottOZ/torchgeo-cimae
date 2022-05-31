@@ -79,6 +79,8 @@ def roi_split_grid(roi: BoundingBox, **kwargs: Any) -> Sequence[Sequence[Boundin
         minx = float(xs[0])
 
         for maxx in xs[1:]:
+            maxx = float(maxx)
+
             bbox = BoundingBox(minx, maxx, miny, maxy, roi.mint, roi.maxt)
             bounding_boxes.append(bbox)
 
