@@ -11,8 +11,10 @@ from kornia.augmentation.container.image import ImageSequential
 from kornia.geometry.transform import Rotate
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
+from torch.nn.functional import relu
 from torch.nn.modules import Module, Sequential
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torchvision.models.resnet import BasicBlock, Bottleneck, _resnet
 
 from torchgeo.models import resnet18, resnet50
 
@@ -44,9 +46,9 @@ def triplet_loss(
     negative = torch.sqrt(((anchor - distant) ** 2).sum(dim=1))
 
     distance = positive - negative + margin
-    loss = torch.nn.functional.relu(distance, inplace=True).mean()
+    loss = relu(distance, inplace=True).mean()
 
-    if l2 != 0:
+    if l2 > 0:
         anchor_norm = torch.linalg.norm(anchor, dim=1)
         neighbor_norm = torch.linalg.norm(neighbor, dim=1)
         distant_norm = torch.linalg.norm(distant, dim=1)
@@ -81,15 +83,13 @@ class Augmentations(Module):
         """
         super().__init__()
         self.size = image_size
+        self.rotations = (torch.tensor([90.0]) * torch.tensor([0, 1, 2, 3])).to(device)
 
         self.augmentation = Sequential(
             K.Resize(size=image_size, align_corners=False),
             K.RandomHorizontalFlip(),
             ImageSequential(
-                Rotate(torch.tensor([0.0], device=device)),
-                Rotate(torch.tensor([90.0], device=device)),
-                Rotate(torch.tensor([180.0], device=device)),
-                Rotate(torch.tensor([270.0], device=device)),
+                *[Rotate(rotation) for rotation in self.rotations],
                 random_apply=1,
                 same_on_batch=True,
             ),
@@ -114,14 +114,7 @@ class Tile2Vec(Module):
     use it in your own work).
     """
 
-    def __init__(
-        self,
-        model: Module,
-        image_size: Tuple[int, int] = (256, 256),
-        device: torch.device = torch.device("cpu"),
-        augment_fn: Optional[Module] = None,
-        **kwargs: Any,
-    ) -> None:
+    def __init__(self, model: Module, **kwargs: Any) -> None:
         """Sets up a model for pre-training with BYOL using projection heads.
 
         Args:
@@ -131,13 +124,7 @@ class Tile2Vec(Module):
         """
         super().__init__()
 
-        self.augment: Module
-        if augment_fn is None:
-            self.augment = Augmentations(image_size, device)
-        else:
-            self.augment = augment_fn
-
-        self.model = model
+        self.encoder = model
 
     def forward(self, x: Tensor) -> Tensor:
         """Forward pass of the model.
@@ -148,11 +135,46 @@ class Tile2Vec(Module):
         Returns:
             output from the model
         """
-        return cast(Tensor, self.model(x).squeeze())
+        return cast(Tensor, self.encoder(x).squeeze())
 
 
 class Tile2VecTask(LightningModule):
     """Class for pre-training any PyTorch model using Tile2Vec."""
+
+    def config_task(self) -> None:
+        """Configures the task based on kwargs parameters passed to the constructor."""
+        pretrained = self.hyperparams.get("pretrained", False)
+        imagenet_pretraining = self.hyperparams.get("imagenet_pretraining", False)
+        sensor = self.hyperparams["sensor"]
+        bands = self.hyperparams.get("bands", "all")
+        encoder = None
+
+        if self.hyperparams["encoder_name"] == "resnet18":
+            if imagenet_pretraining:
+                encoder = _resnet("resnet18", BasicBlock, [2, 2, 2, 2], True, True)
+            else:
+                encoder = resnet18(
+                    sensor=sensor,
+                    bands=bands,
+                    block=BasicBlock,
+                    layers=[2, 2, 2, 2, 2],
+                    pretrained=pretrained,
+                )
+        elif self.hyperparams["encoder_name"] == "resnet50":
+            if imagenet_pretraining:
+                encoder = _resnet("resnet50", BasicBlock, [3, 4, 6, 3], True, True)
+            else:
+                encoder = resnet50(
+                    sensor=sensor, bands=bands, block=BasicBlock, pretrained=pretrained
+                )
+        else:
+            raise ValueError(
+                f"Encoder type '{self.hyperparams['encoder_name']}' is not valid."
+            )
+
+        encoder = Sequential(*(list(encoder.children())[:-1]))
+
+        self.model = Tile2Vec(encoder)
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize a LightningModule for pre-training a model with Tile2Vec.
@@ -173,42 +195,21 @@ class Tile2VecTask(LightningModule):
         self.save_hyperparameters()  # type: ignore[operator]
         self.hyperparams = cast(Dict[str, Any], self.hparams)
 
+        self.config_task()
+
     def setup(self, stage: Optional[str] = None) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
         # See https://github.com/PyTorchLightning/pytorch-lightning/issues/13108
         # current workaround
         if self.trainer is not None:
-            if self.trainer.strategy.root_device.type == "cpu":
-                device = torch.device("cpu")
-            else:
-                device = torch.device("cuda")
+            device = self.trainer.strategy.root_device
 
-        pretrained = self.hyperparams.get("imagenet_pretraining", False)
-        encoder = None
+        patch_size = self.hyperparams.get("patch_size", (256, 256))
+        patch_size = _to_tuple(patch_size)
 
-        if self.hyperparams["encoder_name"] == "resnet18":
-            encoder = resnet18(
-                sensor=self.hyperparams["sensor"],
-                bands=self.hyperparams.get("bands", "all"),
-                pretrained=pretrained,
-            )
-        elif self.hyperparams["encoder_name"] == "resnet50":
-            encoder = resnet50(
-                sensor=self.hyperparams["sensor"],
-                bands=self.hyperparams.get("bands", "all"),
-                pretrained=pretrained,
-            )
-        else:
-            raise ValueError(
-                f"Encoder type '{self.hyperparams['encoder_name']}' is not valid."
-            )
-
-        encoder = Sequential(*(list(encoder.children())[:-1]))
-
-        image_size = self.hyperparams.get("image_size", (256, 256))
-        image_size = _to_tuple(image_size)
-
-        self.model = Tile2Vec(encoder, image_size=image_size, device=device)
+        self.augment = self.hyperparams.get(
+            "augment_fn", Augmentations(patch_size, device)
+        )
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         """Forward pass of the model.
@@ -260,9 +261,9 @@ class Tile2VecTask(LightningModule):
         x = batch["image"]
 
         with torch.no_grad():
-            anchor = self.model.augment(x[:, 0])
-            neighbor = self.model.augment(x[:, 1])
-            distant = self.model.augment(x[:, 2])
+            anchor = self.augment(x[:, 0])
+            neighbor = self.augment(x[:, 1])
+            distant = self.augment(x[:, 2])
 
         pred1, pred2, pred3 = (
             self.forward(anchor),
@@ -278,7 +279,7 @@ class Tile2VecTask(LightningModule):
             self.hyperparams.get("l2", 0),
         )
 
-        self.log("train_loss", loss, on_step=True, on_epoch=False)
+        self.log("train_loss", loss, on_step=True, on_epoch=True)
 
         return loss
 
@@ -291,9 +292,9 @@ class Tile2VecTask(LightningModule):
         batch = args[0]
         x = batch["image"]
 
-        anchor = self.model.augment(x[:, 0])
-        neighbor = self.model.augment(x[:, 1])
-        distant = self.model.augment(x[:, 2])
+        anchor = self.augment(x[:, 0])
+        neighbor = self.augment(x[:, 1])
+        distant = self.augment(x[:, 2])
 
         pred1, pred2, pred3 = (
             self.forward(anchor),

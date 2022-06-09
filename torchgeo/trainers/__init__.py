@@ -5,6 +5,7 @@
 
 from .byol import BYOLTask
 from .classification import ClassificationTask, MultiLabelClassificationTask
+from .embedding_evaluation import EmbeddingEvaluator
 from .regression import RegressionTask
 from .segmentation import SemanticSegmentationTask
 from .tile2vec import Tile2VecTask
@@ -16,6 +17,7 @@ __all__ = (
     "MultiLabelClassificationTask",
     "RegressionTask",
     "SemanticSegmentationTask",
+    "EmbeddingEvaluator",
 )
 
 # https://stackoverflow.com/questions/40018681
