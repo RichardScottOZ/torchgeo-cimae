@@ -111,6 +111,7 @@ class NAIP(RasterDataset):
             filename = url.split("/")[-1]
 
             if os.path.exists(os.path.join(self.root, filename)):
+                print(f"File ({filename}) exists.")
                 continue
 
             # Check if the user requested to download the dataset
