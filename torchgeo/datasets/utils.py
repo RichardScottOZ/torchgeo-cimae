@@ -33,6 +33,8 @@ import rasterio
 import torch
 from pystac.item import Item
 from pystac_client import Client
+from rasterio.crs import CRS
+from rasterio.warp import transform_bounds
 from shapely.geometry import Polygon
 from torch import Tensor
 from torchvision.datasets.utils import check_integrity, download_url
@@ -410,6 +412,8 @@ def create_bounding_box(
     mint: Union[float, str],
     maxt: Union[float, str],
     date_format: str = "%Y%m%d",
+    src_crs: Optional[CRS] = None,
+    dst_crs: Optional[CRS] = None,
 ) -> BoundingBox:
     if isinstance(mint, str):
         try:
@@ -426,6 +430,21 @@ def create_bounding_box(
             raise ValueError(
                 f"Date string or date format invalid: 'maxt={maxt}' or 'date_format={date_format}'"
             )
+
+    if src_crs is not None and dst_crs is not None:
+        try:
+            src_CRS = CRS.from_string(src_crs)
+        except Exception:
+            raise ValueError(f"src_crs ({src_crs}) not in correct format.")
+
+        try:
+            dst_CRS = CRS.from_string(dst_crs)
+        except Exception:
+            raise ValueError(f"dst_crs ({dst_crs}) not in correct EPSG format.")
+
+        minx, miny, maxx, maxy = transform_bounds(
+            src_CRS, dst_CRS, minx, miny, maxx, maxy
+        )
 
     return BoundingBox(minx, maxx, miny, maxy, mint, maxt)
 
