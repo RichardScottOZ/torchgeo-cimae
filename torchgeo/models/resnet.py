@@ -27,7 +27,7 @@ def _resnet(
     sensor: str,
     bands: str,
     arch: str,
-    block: Type[Union[BasicBlock, Bottleneck]],
+    block: Union[BasicBlock, Bottleneck],
     layers: List[int],
     pretrained: bool,
     progress: bool,
@@ -78,6 +78,8 @@ def _resnet(
 def resnet18(
     sensor: str,
     bands: str,
+    block: Union[BasicBlock, Bottleneck] = BasicBlock,
+    layers: List[int] = [2, 2, 2, 2],
     pretrained: bool = False,
     progress: bool = True,
     **kwargs: Any,
@@ -98,14 +100,7 @@ def resnet18(
         A ResNet-18 model
     """
     return _resnet(
-        sensor,
-        bands,
-        "resnet18",
-        Bottleneck,
-        [2, 2, 2, 2],
-        pretrained,
-        progress,
-        **kwargs,
+        sensor, bands, "resnet18", block, layers, pretrained, progress, **kwargs
     )
 
 
