@@ -5,7 +5,7 @@
 
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
-from torch import linspace, randperm
+from torch import linspace, randperm, float64
 from torch.utils.data import Subset, TensorDataset, random_split
 
 from ..datasets import BoundingBox, VisionDataset
@@ -68,8 +68,8 @@ def roi_split_grid(roi: BoundingBox, **kwargs: Any) -> Sequence[Sequence[Boundin
     """
     number_of_cells: Tuple[int, int] = _to_tuple(kwargs["number_of_cells"])
 
-    xs = linspace(roi.minx, roi.maxx, number_of_cells[0] + 1)
-    ys = linspace(roi.miny, roi.maxy, number_of_cells[1] + 1)
+    xs = linspace(roi.minx, roi.maxx, number_of_cells[0] + 1, dtype=float64)
+    ys = linspace(roi.miny, roi.maxy, number_of_cells[1] + 1, dtype=float64)
 
     # TODO: Replace for loop with something??
     bounding_boxes = []
@@ -77,6 +77,7 @@ def roi_split_grid(roi: BoundingBox, **kwargs: Any) -> Sequence[Sequence[Boundin
 
     for maxy in ys[1:]:
         minx = float(xs[0])
+        maxy = float(maxy)
 
         for maxx in xs[1:]:
             maxx = float(maxx)
