@@ -3,7 +3,7 @@
 
 """National Agriculture Imagery Program (NAIP) datamodule."""
 
-from typing import Any, Callable, Dict, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Iterable, Optional, Sequence, Type, Union
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
@@ -13,20 +13,17 @@ from ..datasets import (
     NAIP,
     BoundingBox,
     Chesapeake13,
+    GeoDataset,
     stack_samples,
     stack_triplet_samples,
 )
 from ..samplers.batch import (
+    BatchGeoSampler,
     RandomBatchGeoSampler,
     TripletBatchGeoSampler,
     TripletTileBatchGeoSampler,
 )
-from ..samplers.block import (
-    RandomBlockBatchGeoSampler,
-    TripletBlockBatchGeoSampler,
-    TripletTileBlockBatchGeoSampler,
-)
-from ..samplers.single import GridGeoSampler
+from ..samplers.single import GeoSampler, GridGeoSampler
 from .utils import roi_split_half
 
 # https://github.com/pytorch/pytorch/issues/60979
@@ -193,7 +190,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
     def __init__(
         self,
         naip_root_dir: str,
-        cdl_root_dir: str,
+        cdl_root_dir: Optional[str] = None,
         batch_size: int = 64,
         length: int = 1000,
         num_workers: int = 0,
@@ -204,6 +201,24 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         ] = roi_split_half,
         area_of_interest: Optional[BoundingBox] = None,
         date_range: Optional[str] = None,
+        train_sampler: Union[
+            Type[GeoSampler], Type[BatchGeoSampler]
+        ] = RandomBatchGeoSampler,
+        val_sampler: Union[
+            Type[GeoSampler], Type[BatchGeoSampler]
+        ] = RandomBatchGeoSampler,
+        test_sampler: Union[
+            Type[GeoSampler], Type[BatchGeoSampler]
+        ] = RandomBatchGeoSampler,
+        train_collate_fn: Callable[
+            [Iterable[Dict[Any, Any]]], Dict[Any, Any]
+        ] = stack_samples,
+        val_collate_fn: Callable[
+            [Iterable[Dict[Any, Any]]], Dict[Any, Any]
+        ] = stack_samples,
+        test_collate_fn: Callable[
+            [Iterable[Dict[Any, Any]]], Dict[Any, Any]
+        ] = stack_samples,
         cache: bool = True,
         cache_size: int = 128,
         pin_memory: bool = False,
@@ -231,6 +246,12 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         self.pin_memory = pin_memory
         self.area_of_interest = area_of_interest
         self.date_range = date_range
+        self.train_sampler = train_sampler
+        self.val_sampler = val_sampler
+        self.test_sampler = test_sampler
+        self.train_collate_fn = train_collate_fn
+        self.val_collate_fn = val_collate_fn
+        self.test_collate_fn = test_collate_fn
         self.cache = cache
         self.cache_size = cache_size
         self.block_size = block_size
@@ -262,6 +283,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             preprocessed CDL data
         """
         sample["mask"] = sample["mask"].long()[0]
+        sample["mask"] = sample["mask"].mode()[0].mode()[0].unsqueeze(0)
 
         del sample["bbox"]
 
@@ -278,7 +300,8 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             date_range=self.date_range,
             download=False,
         )
-        # CDL(self.cdl_root_dir, download=False, checksum=False)
+        if self.cdl_root_dir is not None:
+            CDL(self.cdl_root_dir, download=False, checksum=False)
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Initialize the main ``Dataset`` objects.
@@ -294,41 +317,48 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             cache=self.cache,
             cache_size=self.cache_size,
         )
-        # cdl = CDL(self.cdl_root_dir, naip.crs, naip.res, transforms=self.cdl_transform)
 
-        self.dataset = naip  # & cdl
+        self.dataset: GeoDataset
+        if self.cdl_root_dir is not None:
+            cdl = CDL(
+                self.cdl_root_dir, naip.crs, naip.res, transforms=self.cdl_transform
+            )
+            self.dataset = naip & cdl
+        else:
+            self.dataset = naip
 
-        roi = self.dataset.bounds
-        train_roi, val_roi, test_roi = self.dataset_split(roi, **self.kwargs)
+        if self.area_of_interest is None:
+            self.area_of_interest = BoundingBox(*self.dataset.bounds)
 
-        self.train_sampler = TripletTileBlockBatchGeoSampler(
-            naip,
-            self.patch_size,
-            self.neighborhood,
-            self.batch_size,
-            self.length,
-            train_roi,
-            block_size=self.block_size,
+        train_roi, val_roi, test_roi = self.dataset_split(
+            self.area_of_interest, **self.kwargs
         )
 
-        self.val_sampler = TripletTileBlockBatchGeoSampler(
-            naip,
-            self.patch_size,
-            self.neighborhood,
-            self.batch_size,
-            self.length,
-            val_roi,
-            block_size=self.block_size,
+        self.train_sampler = self.train_sampler(
+            dataset=self.dataset,
+            size=self.patch_size,
+            neighborhood=self.neighborhood,
+            batch_size=self.batch_size,
+            length=self.length,
+            roi=train_roi,
         )
 
-        self.test_sampler = TripletTileBlockBatchGeoSampler(
-            naip,
-            self.patch_size,
-            self.neighborhood,
-            self.batch_size,
-            self.length,
-            test_roi,
+        self.val_sampler = self.val_sampler(
+            dataset=self.dataset,
+            size=self.patch_size,
+            neighborhood=self.neighborhood,
+            batch_size=self.batch_size,
+            length=self.length,
+            roi=val_roi,
+        )
+
+        self.test_sampler = self.test_sampler(
+            dataset=self.dataset,
+            size=self.patch_size,
             block_size=self.block_size,
+            batch_size=self.batch_size,
+            length=self.length,
+            roi=self.area_of_interest,
         )
 
     def train_dataloader(self) -> DataLoader[Any]:
@@ -337,13 +367,23 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         Returns:
             training data loader
         """
-        return DataLoader(
-            self.dataset,
-            batch_sampler=self.train_sampler,
-            num_workers=self.num_workers,
-            collate_fn=stack_triplet_samples,
-            pin_memory=self.pin_memory,
-        )
+        if isinstance(self.train_sampler, GeoSampler):
+            return DataLoader(
+                self.dataset,
+                sampler=self.train_sampler,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                collate_fn=self.train_collate_fn,
+                pin_memory=self.pin_memory,
+            )
+        elif isinstance(self.train_sampler, BatchGeoSampler):
+            return DataLoader(
+                self.dataset,
+                batch_sampler=self.train_sampler,
+                num_workers=self.num_workers,
+                collate_fn=self.train_collate_fn,
+                pin_memory=self.pin_memory,
+            )
 
     def val_dataloader(self) -> DataLoader[Any]:
         """Return a DataLoader for validation.
@@ -351,13 +391,23 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         Returns:
             validation data loader
         """
-        return DataLoader(
-            self.dataset,
-            batch_sampler=self.val_sampler,
-            num_workers=self.num_workers,
-            collate_fn=stack_triplet_samples,
-            pin_memory=self.pin_memory,
-        )
+        if isinstance(self.val_sampler, GeoSampler):
+            return DataLoader(
+                self.dataset,
+                sampler=self.val_sampler,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                collate_fn=self.val_collate_fn,
+                pin_memory=self.pin_memory,
+            )
+        elif isinstance(self.val_sampler, BatchGeoSampler):
+            return DataLoader(
+                self.dataset,
+                batch_sampler=self.val_sampler,
+                num_workers=self.num_workers,
+                collate_fn=self.val_collate_fn,
+                pin_memory=self.pin_memory,
+            )
 
     def test_dataloader(self) -> DataLoader[Any]:
         """Return a DataLoader for testing.
@@ -365,10 +415,20 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         Returns:
             testing data loader
         """
-        return DataLoader(
-            self.dataset,
-            batch_sampler=self.test_sampler,
-            num_workers=self.num_workers,
-            collate_fn=stack_triplet_samples,
-            pin_memory=self.pin_memory,
-        )
+        if isinstance(self.test_sampler, GeoSampler):
+            return DataLoader(
+                self.dataset,
+                sampler=self.test_sampler,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                collate_fn=self.test_collate_fn,
+                pin_memory=self.pin_memory,
+            )
+        elif isinstance(self.test_sampler, BatchGeoSampler):
+            return DataLoader(
+                self.dataset,
+                batch_sampler=self.test_sampler,
+                num_workers=self.num_workers,
+                collate_fn=self.test_collate_fn,
+                pin_memory=self.pin_memory,
+            )
