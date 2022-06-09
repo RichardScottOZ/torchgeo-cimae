@@ -5,13 +5,13 @@ channels:
   - esri  # for pycocotools. Remove when https://github.com/conda-forge/pycocotools-feedstock/issues/16 is solved
   - open3d-admin  # for open3d
 dependencies:
-  - cudatoolkit
   - einops
   - fiona>=1.5
   - h5py
   - numpy
   - open3d>=0.11.2
   - pip
+  - protobuf<4
   - pycocotools
   - pyproj>=2.2
   - python>=3.7
@@ -26,7 +26,7 @@ dependencies:
     - ipywidgets>=7
     - isort[colors]>=5.8
     - jupyterlab
-    - kornia>=0.5.11
+    - kornia>=0.6.4
     - laspy>=2.0.0
     - mypy>=0.900
     - nbmake>=0.1

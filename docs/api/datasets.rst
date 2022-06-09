@@ -52,6 +52,11 @@ Cropland Data Layer (CDL)
 
 .. autoclass:: CDL
 
+EDDMapS
+^^^^^^^
+
+.. autoclass:: EDDMapS
+
 EnviroAtlas
 ^^^^^^^^^^^
 
@@ -76,6 +81,11 @@ GlobBiomass
 ^^^^^^^^^^^
 
 .. autoclass:: GlobBiomass
+
+iNaturalist
+^^^^^^^^^^^
+
+.. autoclass:: INaturalist
 
 Landsat
 ^^^^^^^
