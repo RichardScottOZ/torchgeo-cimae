@@ -90,8 +90,8 @@ from .ucmerced import UCMerced
 from .usavars import USAVars
 from .utils import (
     BoundingBox,
-    create_bounding_box,
     concat_samples,
+    create_bounding_box,
     merge_samples,
     search_stac,
     stack_samples,

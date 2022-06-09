@@ -9,13 +9,13 @@ from .batch import (
     TripletBatchGeoSampler,
     TripletTileBatchGeoSampler,
 )
-from .constants import Units
-from .single import GeoSampler, GridGeoSampler, PreChippedGeoSampler, RandomGeoSampler
 from .block import (
     RandomBlockBatchGeoSampler,
     TripletBlockBatchGeoSampler,
     TripletTileBlockBatchGeoSampler,
 )
+from .constants import Units
+from .single import GeoSampler, GridGeoSampler, PreChippedGeoSampler, RandomGeoSampler
 
 __all__ = (
     # Samplers

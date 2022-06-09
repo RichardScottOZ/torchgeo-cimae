@@ -5,7 +5,7 @@
 
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
-from torch import linspace, randperm, float64
+from torch import float64, linspace, randperm
 from torch.utils.data import Subset, TensorDataset, random_split
 
 from ..datasets import BoundingBox, VisionDataset
