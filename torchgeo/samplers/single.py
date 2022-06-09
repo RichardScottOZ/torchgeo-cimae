@@ -4,7 +4,7 @@
 """TorchGeo samplers."""
 
 import abc
-from typing import Callable, Iterable, Iterator, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
 import torch
 from rtree.index import Index, Property
@@ -32,6 +32,7 @@ class GeoSampler(Sampler[BoundingBox], abc.ABC):
         self,
         dataset: GeoDataset,
         roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -83,6 +84,7 @@ class RandomGeoSampler(GeoSampler):
         length: int,
         roi: Optional[BoundingBox] = None,
         units: Units = Units.PIXELS,
+        **kwargs: Any,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -175,6 +177,7 @@ class GridGeoSampler(GeoSampler):
         stride: Union[Tuple[float, float], float],
         roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
         units: Units = Units.PIXELS,
+        **kwargs: Any,
     ) -> None:
         """Initialize a new Sampler instance.
 
