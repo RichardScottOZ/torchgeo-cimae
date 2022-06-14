@@ -53,7 +53,15 @@ class BatchGeoSampler(Sampler[List[BoundingBox]], abc.ABC):
                 hits = dataset.index.intersection(tuple(region), objects=True)
                 for hit in hits:
                     bbox = BoundingBox(*hit.bounds) & region
-                    self.index.insert(hit.id, tuple(bbox), hit.object)
+                    bbox_time = BoundingBox(
+                        bbox.minx,
+                        bbox.maxx,
+                        bbox.miny,
+                        bbox.maxy,
+                        region.mint,
+                        region.maxt,
+                    )
+                    self.index.insert(hit.id, tuple(bbox_time), hit.object)
 
         self.res = dataset.res
         self.roi = roi
