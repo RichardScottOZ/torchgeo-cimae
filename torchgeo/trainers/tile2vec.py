@@ -12,7 +12,7 @@ from kornia.geometry.transform import Rotate
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
 from torch.nn.functional import relu
-from torch.nn.modules import Module, Sequential
+from torch.nn.modules import BatchNorm1d, Linear, Module, ReLU, Sequential
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.models.resnet import BasicBlock, Bottleneck, _resnet
 
@@ -107,6 +107,39 @@ class Augmentations(Module):
         return cast(Tensor, self.augmentation(x))
 
 
+class MLP(Module):
+    """MLP used in the BYOL projection head."""
+
+    def __init__(
+        self, dim: int, projection_size: int = 256, hidden_size: int = 4096
+    ) -> None:
+        """Initializes the MLP projection head.
+
+        Args:
+            dim: size of layer to project
+            projection_size: size of the output layer
+            hidden_size: size of the hidden layer
+        """
+        super().__init__()
+        self.mlp = Sequential(
+            Linear(dim, hidden_size),
+            BatchNorm1d(hidden_size),  # type: ignore[no-untyped-call]
+            ReLU(inplace=True),
+            Linear(hidden_size, projection_size),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward pass of the MLP model.
+
+        Args:
+            x: batch of imagery
+
+        Returns:
+            embedded version of the input
+        """
+        return cast(Tensor, self.mlp(x))
+
+
 class Tile2Vec(Module):
     """Tile2Vec implementation.
 
@@ -114,7 +147,7 @@ class Tile2Vec(Module):
     use it in your own work).
     """
 
-    def __init__(self, model: Module, **kwargs: Any) -> None:
+    def __init__(self, model: Module) -> None:
         """Sets up a model for pre-training with BYOL using projection heads.
 
         Args:
@@ -141,8 +174,8 @@ class Tile2Vec(Module):
 class Tile2VecTask(LightningModule):
     """Class for pre-training any PyTorch model using Tile2Vec."""
 
-    def config_task(self) -> None:
-        """Configures the task based on kwargs parameters passed to the constructor."""
+    def config_task(self, **kwargs: Any) -> None:
+        """TODO: Docstring."""
         pretrained = self.hyperparams.get("pretrained", False)
         imagenet_pretraining = self.hyperparams.get("imagenet_pretraining", False)
         sensor = self.hyperparams["sensor"]
@@ -157,19 +190,27 @@ class Tile2VecTask(LightningModule):
                     sensor=sensor,
                     bands=bands,
                     block=BasicBlock,
-                    layers=[2, 2, 2, 2, 2],
+                    layers=[2, 2, 2, 2],
                     pretrained=pretrained,
                 )
         elif self.hyperparams["encoder_name"] == "resnet50":
             if imagenet_pretraining:
-                encoder = _resnet("resnet50", BasicBlock, [3, 4, 6, 3], True, True)
+                encoder = _resnet("resnet50", Bottleneck, [3, 4, 6, 3], True, True)
             else:
-                encoder = resnet50(
-                    sensor=sensor, bands=bands, block=BasicBlock, pretrained=pretrained
-                )
+                encoder = resnet50(sensor=sensor, bands=bands, pretrained=pretrained)
         else:
             raise ValueError(
                 f"Encoder type '{self.hyperparams['encoder_name']}' is not valid."
+            )
+
+        self.projector: Optional[Module] = None
+        if self.hyperparams.get("project", False):
+            prev_dim = encoder.fc.weight.shape[1]
+
+            self.projector = Sequential(
+                Linear(prev_dim, prev_dim),
+                ReLU(inplace=True),
+                Linear(prev_dim, self.hyperparams.get("projection_dim", 512)),
             )
 
         encoder = Sequential(*(list(encoder.children())[:-1]))
@@ -242,11 +283,47 @@ class Tile2VecTask(LightningModule):
             "lr_scheduler": {
                 "scheduler": ReduceLROnPlateau(
                     optimizer,
-                    patience=self.hyperparams.get("learning_rate_schedule_patience", 0),
+                    patience=self.hyperparams.get(
+                        "learning_rate_schedule_patience", 10
+                    ),
                 ),
-                "monitor": "train_loss",
+                "monitor": f"train_{'embedding' if self.projector is None else 'projector'}_loss",
             },
         }
+
+    def shared_step(self, *args: Any, **kwargs: Any) -> Tuple[Tensor, Optional[Tensor]]:
+        """TODO: Docstring."""
+        batch = args[0]
+        x = batch["image"]
+
+        with torch.no_grad():
+            anchor = self.augment(x[:, 0])
+            neighbor = self.augment(x[:, 1])
+            distant = self.augment(x[:, 2])
+
+        anchor_embeddings = self.forward(anchor)
+        neighbor_embeddings = self.forward(neighbor)
+        distant_embeddings = self.forward(distant)
+
+        embedding_loss = triplet_loss(
+            anchor_embeddings,
+            neighbor_embeddings,
+            distant_embeddings,
+            self.hyperparams.get("margin", 0.1),
+            self.hyperparams.get("l2", 0),
+        )
+
+        projector_loss: Optional[Tensor] = None
+        if self.projector is not None:
+            projector_loss = triplet_loss(
+                self.projector(anchor_embeddings),
+                self.projector(neighbor_embeddings),
+                self.projector(distant_embeddings),
+                self.hyperparams.get("margin", 0.1),
+                self.hyperparams.get("l2", 0),
+            )
+
+        return (embedding_loss, projector_loss)
 
     def training_step(self, *args: Any, **kwargs: Any) -> Tensor:
         """Compute and return the training loss.
@@ -257,31 +334,16 @@ class Tile2VecTask(LightningModule):
         Returns:
             training loss
         """
-        batch = args[0]
-        x = batch["image"]
+        embedding_loss, projector_loss = self.shared_step(*args, **kwargs)
 
-        with torch.no_grad():
-            anchor = self.augment(x[:, 0])
-            neighbor = self.augment(x[:, 1])
-            distant = self.augment(x[:, 2])
+        self.log("train_embedding_loss", embedding_loss, on_step=True, on_epoch=True)
 
-        pred1, pred2, pred3 = (
-            self.forward(anchor),
-            self.forward(neighbor),
-            self.forward(distant),
-        )
+        if projector_loss is None:
+            return embedding_loss
 
-        loss = triplet_loss(
-            pred1,
-            pred2,
-            pred3,
-            self.hyperparams.get("margin", 0.1),
-            self.hyperparams.get("l2", 0),
-        )
+        self.log("train_projector_loss", projector_loss, on_step=True, on_epoch=True)
 
-        self.log("train_loss", loss, on_step=True, on_epoch=True)
-
-        return loss
+        return projector_loss
 
     def validation_step(self, *args: Any, **kwargs: Any) -> None:
         """Compute validation loss.
@@ -289,28 +351,11 @@ class Tile2VecTask(LightningModule):
         Args:
             batch: the output of your DataLoader
         """
-        batch = args[0]
-        x = batch["image"]
+        embedding_loss, projector_loss = self.shared_step(*args, **kwargs)
 
-        anchor = self.augment(x[:, 0])
-        neighbor = self.augment(x[:, 1])
-        distant = self.augment(x[:, 2])
-
-        pred1, pred2, pred3 = (
-            self.forward(anchor),
-            self.forward(neighbor),
-            self.forward(distant),
-        )
-
-        loss = triplet_loss(
-            pred1,
-            pred2,
-            pred3,
-            self.hyperparams.get("margin", 0.1),
-            self.hyperparams.get("l2", 0),
-        )
-
-        self.log("val_loss", loss, on_step=False, on_epoch=True)
+        self.log("val_loss", embedding_loss, on_step=True, on_epoch=True)
+        if projector_loss is not None:
+            self.log("val_projector_loss", projector_loss, on_step=True, on_epoch=True)
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """No-op, does nothing."""

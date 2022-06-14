@@ -21,7 +21,7 @@ from .resisc45 import RESISC45DataModule
 from .sen12ms import SEN12MSDataModule
 from .so2sat import So2SatDataModule
 from .ucmerced import UCMercedDataModule
-from .utils import roi_split_grid
+from .utils import roi_split_grid, roi_split_half
 from .vaihingen import Vaihingen2DDataModule
 from .xview import XView2DataModule
 
@@ -51,6 +51,7 @@ __all__ = (
     "XView2DataModule",
     # Utils
     "roi_split_grid",
+    "roi_split_half",
 )
 
 # https://stackoverflow.com/questions/40018681

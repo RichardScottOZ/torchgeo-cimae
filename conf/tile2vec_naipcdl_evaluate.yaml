@@ -1,0 +1,62 @@
+trainer:
+  gpus: 1
+  max_epochs: 20
+  precision: 16
+  benchmark: True
+experiment:
+  task: "tile2vec_naipcdl_evaluate"
+  name: "tile2vec_naipcdl_evaluate"
+  run:
+    fit: True
+    test: True
+  module:
+    task_name: "tile2vec"
+    model: "tile2vec"
+    encoder_name: "resnet18"
+    sensor: "naip"
+    num_classes: 255
+    patch_size: 50
+    checkpoint_path: ""
+    imagenet_pretraining: False
+    lr: 0.02
+    momentum: 0.9
+    weight_decay: 0.000001
+    project: False
+    learning_rate_schedule_patience: 6
+  datamodule:
+    naip_root_dir: "/scratch/NAIP"
+    cdl_root_dir: "/scratch/CDL"
+    batch_size: 256
+    train_length: 10000
+    val_length: 1250
+    test_length: 10000
+    num_workers: 4
+    patch_size: 50
+    neighborhood: 100
+    dataset_split: "roi_split_grid"
+    number_of_cells: 12
+    area_of_interest:
+      - -120.25
+      - -119.65
+      - 36.45
+      - 37.05
+      - "2016-01-01"
+      - "2017-01-01"
+      - "EPSG:4326"
+      - "EPSG:26911"
+    date_range: "2016-01-01/2017-01-01"
+    train_sampler_class: "RandomGeoSampler"
+    val_sampler_class: "RandomGeoSampler"
+    test_sampler_class: "RandomGeoSampler"
+    train_collate_fn: "stack_samples"
+    val_collate_fn: "stack_samples"
+    test_collate_fn: "stack_samples"
+    val_pct: 0.14
+    test_pct: 0.14
+    cache: True
+    cache_size: 75
+    pin_memory: True
+logger:
+  name: "wandb"
+  offline: True
+  project_name: "master-thesis"

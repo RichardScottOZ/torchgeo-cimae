@@ -1,0 +1,57 @@
+trainer:
+  gpus: 1
+  max_epochs: 50
+  precision: 16
+  benchmark: True
+experiment:
+  task: "tile2vec_naipcdl_train"
+  name: "tile2vec_naipcdl_train"
+  run:
+    fit: True
+    test: False
+  module:
+    model: "tile2vec"
+    encoder_name: "resnet18"
+    sensor: "naip"
+    patch_size: 50
+    imagenet_pretraining: False
+    lr: 0.001
+    betas:
+      - 0.5
+      - 0.999
+    margin: 10
+    l2: 0.01
+    project: False
+    learning_rate_schedule_patience: 6
+  datamodule:
+    naip_root_dir: "/scratch/NAIP"
+    batch_size: 50
+    train_length: 100000
+    val_length: 15000
+    num_workers: 4
+    patch_size: 50
+    neighborhood: 100
+    dataset_split: "roi_split_grid"
+    number_of_cells: 12
+    area_of_interest:
+      - -120.25
+      - -119.65
+      - 36.45
+      - 37.05
+      - "2016-01-01"
+      - "2017-01-01"
+      - "EPSG:4326"
+      - "EPSG:26911"
+    train_sampler_class: "TripletBatchGeoSampler"
+    val_sampler_class: "TripletBatchGeoSampler"
+    train_collate_fn: "stack_triplet_samples"
+    val_collate_fn: "stack_triplet_samples"
+    val_pct: 0.14
+    test_pct: 0.14
+    cache: True
+    cache_size: 75
+    pin_memory: True
+logger:
+  name: "wandb"
+  offline: True
+  project_name: "master-thesis"

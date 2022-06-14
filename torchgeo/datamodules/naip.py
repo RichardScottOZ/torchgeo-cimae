@@ -3,10 +3,14 @@
 
 """National Agriculture Imagery Program (NAIP) datamodule."""
 
-from typing import Any, Callable, Dict, Iterable, Optional, Sequence, Type, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Type, Union
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
+
+import torchgeo.datamodules as datamodules
+import torchgeo.datasets as datasets
+import torchgeo.samplers as samplers
 
 from ..datasets import (
     CDL,
@@ -14,6 +18,7 @@ from ..datasets import (
     BoundingBox,
     Chesapeake13,
     GeoDataset,
+    create_bounding_box,
     stack_samples,
     stack_triplet_samples,
 )
@@ -193,32 +198,20 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         cdl_root_dir: Optional[str] = None,
         batch_size: int = 64,
         length: int = 1000,
+        train_length: Optional[int] = None,
+        val_length: Optional[int] = None,
+        test_length: Optional[int] = None,
         num_workers: int = 0,
         patch_size: int = 256,
         neighborhood: int = 100,
-        dataset_split: Callable[
-            ..., Sequence[Union[BoundingBox, Sequence[BoundingBox]]]
-        ] = roi_split_half,
-        area_of_interest: Optional[BoundingBox] = None,
-        date_range: Optional[str] = None,
-        train_sampler: Union[
-            Type[GeoSampler], Type[BatchGeoSampler]
-        ] = RandomBatchGeoSampler,
-        val_sampler: Union[
-            Type[GeoSampler], Type[BatchGeoSampler]
-        ] = RandomBatchGeoSampler,
-        test_sampler: Union[
-            Type[GeoSampler], Type[BatchGeoSampler]
-        ] = RandomBatchGeoSampler,
-        train_collate_fn: Callable[
-            [Iterable[Dict[Any, Any]]], Dict[Any, Any]
-        ] = stack_samples,
-        val_collate_fn: Callable[
-            [Iterable[Dict[Any, Any]]], Dict[Any, Any]
-        ] = stack_samples,
-        test_collate_fn: Callable[
-            [Iterable[Dict[Any, Any]]], Dict[Any, Any]
-        ] = stack_samples,
+        dataset_split: str = "roi_split_half",
+        area_of_interest: Optional[List[Any]] = None,
+        train_sampler_class: str = "RandomBatchGeoSampler",
+        val_sampler_class: str = "RandomBatchGeoSampler",
+        test_sampler_class: str = "RandomBatchGeoSampler",
+        train_collate_fn: str = "stack_samples",
+        val_collate_fn: str = "stack_samples",
+        test_collate_fn: str = "stack_samples",
         cache: bool = True,
         cache_size: int = 128,
         pin_memory: bool = False,
@@ -239,19 +232,25 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         self.cdl_root_dir = cdl_root_dir
         self.batch_size = batch_size
         self.length = length
+        self.train_length = train_length if train_length else length
+        self.val_length = val_length if val_length else length
+        self.test_length = test_length if test_length else length
         self.num_workers = num_workers
         self.patch_size = patch_size
         self.neighborhood = neighborhood
-        self.dataset_split = dataset_split
+        self.dataset_split = getattr(datamodules, dataset_split)
         self.pin_memory = pin_memory
-        self.area_of_interest = area_of_interest
-        self.date_range = date_range
-        self.train_sampler = train_sampler
-        self.val_sampler = val_sampler
-        self.test_sampler = test_sampler
-        self.train_collate_fn = train_collate_fn
-        self.val_collate_fn = val_collate_fn
-        self.test_collate_fn = test_collate_fn
+        self.area_of_interest: Optional[BoundingBox] = None
+        self.date_range: Optional[str] = None
+        if area_of_interest is not None:
+            self.area_of_interest = create_bounding_box(*area_of_interest)
+            self.date_range = f"{area_of_interest[4]}/{area_of_interest[5]}"
+        self.train_sampler_class = getattr(samplers, train_sampler_class)
+        self.val_sampler_class = getattr(samplers, val_sampler_class)
+        self.test_sampler_class = getattr(samplers, test_sampler_class)
+        self.train_collate_fn = getattr(datasets, train_collate_fn)
+        self.val_collate_fn = getattr(datasets, val_collate_fn)
+        self.test_collate_fn = getattr(datasets, test_collate_fn)
         self.cache = cache
         self.cache_size = cache_size
         self.block_size = block_size
@@ -334,31 +333,31 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             self.area_of_interest, **self.kwargs
         )
 
-        self.train_sampler = self.train_sampler(
+        self.train_sampler = self.train_sampler_class(
             dataset=self.dataset,
             size=self.patch_size,
             neighborhood=self.neighborhood,
             batch_size=self.batch_size,
-            length=self.length,
+            length=self.train_length,
             roi=train_roi,
         )
 
-        self.val_sampler = self.val_sampler(
+        self.val_sampler = self.val_sampler_class(
             dataset=self.dataset,
             size=self.patch_size,
             neighborhood=self.neighborhood,
             batch_size=self.batch_size,
-            length=self.length,
+            length=self.val_length,
             roi=val_roi,
         )
 
-        self.test_sampler = self.test_sampler(
+        self.test_sampler = self.test_sampler_class(
             dataset=self.dataset,
             size=self.patch_size,
             block_size=self.block_size,
             batch_size=self.batch_size,
-            length=self.length,
-            roi=self.area_of_interest,
+            length=self.test_length,
+            roi=test_roi,
         )
 
     def train_dataloader(self) -> DataLoader[Any]:

@@ -411,9 +411,9 @@ def create_bounding_box(
     maxy: float,
     mint: Union[float, str],
     maxt: Union[float, str],
-    date_format: str = "%Y%m%d",
-    src_crs: Optional[CRS] = None,
-    dst_crs: Optional[CRS] = None,
+    src_crs: Optional[Union[str, CRS]] = None,
+    dst_crs: Optional[Union[str, CRS]] = None,
+    date_format: str = "%Y-%m-%d",
 ) -> BoundingBox:
     if isinstance(mint, str):
         try:
