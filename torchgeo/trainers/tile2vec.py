@@ -296,6 +296,9 @@ class Tile2VecTask(LightningModule):
         batch = args[0]
         x = batch["image"]
 
+        if self.hyperparams.get("imagenet_pretraining", False):
+            x = x[:, :3]
+
         with torch.no_grad():
             anchor = self.augment(x[:, 0])
             neighbor = self.augment(x[:, 1])
