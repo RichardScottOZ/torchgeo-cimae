@@ -6,12 +6,13 @@
 """torchgeo model training script."""
 
 import os
-from typing import Any, Dict, Tuple, Type, cast
+from typing import Any, Dict, List, Tuple, Type, cast
 
 import pytorch_lightning as pl
 from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import ConfigAttributeError
 from pytorch_lightning import loggers as pl_loggers
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 
 from torchgeo.datamodules import (
     BigEarthNetDataModule,
@@ -22,6 +23,7 @@ from torchgeo.datamodules import (
     EuroSATDataModule,
     InriaAerialImageLabelingDataModule,
     LandCoverAIDataModule,
+    NAIPCDLDataModule,
     NAIPChesapeakeDataModule,
     OSCDDataModule,
     RESISC45DataModule,
@@ -32,9 +34,11 @@ from torchgeo.datamodules import (
 from torchgeo.trainers import (
     BYOLTask,
     ClassificationTask,
+    EmbeddingEvaluator,
     MultiLabelClassificationTask,
     RegressionTask,
     SemanticSegmentationTask,
+    Tile2VecTask,
 )
 
 TASK_TO_MODULES_MAPPING: Dict[
@@ -55,6 +59,8 @@ TASK_TO_MODULES_MAPPING: Dict[
     "sen12ms": (SemanticSegmentationTask, SEN12MSDataModule),
     "so2sat": (ClassificationTask, So2SatDataModule),
     "ucmerced": (ClassificationTask, UCMercedDataModule),
+    "tile2vec_naipcdl_train": (Tile2VecTask, NAIPCDLDataModule),
+    "tile2vec_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
 }
 
 
@@ -121,6 +127,19 @@ def main(conf: DictConfig) -> None:
 
     experiment_name = conf.experiment.name
     task_name = conf.experiment.task
+    run_name = (
+        f"{conf.experiment.module.model}-{conf.experiment.module.encoder_name}"
+        f"{'-project' if conf.experiment.module.project else ''}"
+        f"{'-imagenet_pretraining' if conf.experiment.module.imagenet_pretraining else ''}"
+    )
+    try:
+        if conf.experiment.module.checkpoint_path == '':
+            run_name += '-untrained'
+        else:
+            run_name += '-trained'
+    except ConfigAttributeError:
+        pass
+
     if os.path.isfile(conf.program.output_dir):
         raise NotADirectoryError("`program.output_dir` must be a directory")
     os.makedirs(conf.program.output_dir, exist_ok=True)
@@ -128,19 +147,22 @@ def main(conf: DictConfig) -> None:
     experiment_dir = os.path.join(conf.program.output_dir, experiment_name)
     os.makedirs(experiment_dir, exist_ok=True)
 
-    if len(os.listdir(experiment_dir)) > 0:
+    run_dir = os.path.join(experiment_dir, run_name)
+    os.makedirs(run_dir, exist_ok=True)
+
+    if len(os.listdir(run_dir)) > 0:
         if conf.program.overwrite:
             print(
-                f"WARNING! The experiment directory, {experiment_dir}, already exists, "
+                f"WARNING! The experiment directory, {run_dir}, already exists, "
                 + "we might overwrite data in it!"
             )
         else:
             raise FileExistsError(
-                f"The experiment directory, {experiment_dir}, already exists and isn't "
+                f"The experiment directory, {run_dir}, already exists and isn't "
                 + "empty. We don't want to overwrite any existing results, exiting..."
             )
 
-    with open(os.path.join(experiment_dir, "experiment_config.yaml"), "w") as f:
+    with open(os.path.join(run_dir, "experiment_config.yaml"), "w") as f:
         OmegaConf.save(config=conf, f=f)
 
     ######################################
@@ -166,19 +188,43 @@ def main(conf: DictConfig) -> None:
     ######################################
     # Setup trainer
     ######################################
-    tb_logger = pl_loggers.TensorBoardLogger(conf.program.log_dir, name=experiment_name)
-
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_loss", dirpath=experiment_dir, save_top_k=1, save_last=True
-    )
-    early_stopping_callback = EarlyStopping(
-        monitor="val_loss", min_delta=0.00, patience=18
-    )
-
     trainer_args = cast(Dict[str, Any], OmegaConf.to_object(conf.trainer))
+    logger_args = cast(Dict[str, Any], OmegaConf.to_object(conf.logger))
+    log_dir = os.path.join(conf.program.log_dir, run_name)
 
-    trainer_args["callbacks"] = [checkpoint_callback, early_stopping_callback]
-    trainer_args["logger"] = tb_logger
+    logger: pl_loggers.LightningLoggerBase
+    if "name" not in logger_args or logger_args["name"] == "tensorboard":
+        logger = pl_loggers.TensorBoardLogger(log_dir, name=experiment_name)
+    elif logger_args["name"] == "wandb":
+        os.makedirs(experiment_dir, exist_ok=True)
+        offline = logger_args.get("offline", False)
+        logger = pl_loggers.WandbLogger(
+            name=run_name,
+            save_dir=log_dir,
+            project=logger_args.get("project_name", "torchgeo"),
+            group=experiment_name,
+            log_model=(not offline),
+            offline=offline,
+        )
+    else:
+        raise ValueError(
+            f"experiment.task={task_name} is not recognized as a valid task"
+        )
+
+    callbacks: List[Callback] = []
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val_loss", dirpath=run_dir, save_top_k=1, save_last=True
+    )
+    callbacks.append(checkpoint_callback)
+
+    if "early_stopping" in trainer_args:
+        early_stopping_callback = EarlyStopping(
+            monitor="val_loss", min_delta=0.00, patience=18
+        )
+        callbacks.append(early_stopping_callback)
+
+    trainer_args["callbacks"] = callbacks
+    trainer_args["logger"] = logger
     trainer_args["default_root_dir"] = experiment_dir
     trainer = pl.Trainer(**trainer_args)
 
@@ -188,8 +234,10 @@ def main(conf: DictConfig) -> None:
     ######################################
     # Run experiment
     ######################################
-    trainer.fit(model=task, datamodule=datamodule)
-    trainer.test(model=task, datamodule=datamodule)
+    if conf.experiment.run.fit:
+        trainer.fit(model=task, datamodule=datamodule)
+    if conf.experiment.run.test:
+        trainer.test(model=task, datamodule=datamodule)
 
 
 if __name__ == "__main__":
@@ -197,6 +245,7 @@ if __name__ == "__main__":
     _rasterio_best_practices = {
         "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
         "AWS_NO_SIGN_REQUEST": "YES",
+        "GDAL_CACHE_MAX": "10000",
         "GDAL_MAX_RAW_BLOCK_CACHE_SIZE": "200000000",
         "GDAL_SWATH_SIZE": "200000000",
         "VSI_CURL_CACHE_SIZE": "200000000",
