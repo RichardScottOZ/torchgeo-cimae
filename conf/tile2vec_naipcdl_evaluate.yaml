@@ -58,5 +58,5 @@ experiment:
     pin_memory: True
 logger:
   name: "wandb"
-  offline: True
+  offline: False
   project_name: "master-thesis"

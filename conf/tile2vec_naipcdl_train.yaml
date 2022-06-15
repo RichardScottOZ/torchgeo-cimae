@@ -15,6 +15,7 @@ experiment:
     sensor: "naip"
     patch_size: 50
     imagenet_pretraining: False
+    pretrained: False
     lr: 0.001
     betas:
       - 0.5
@@ -53,5 +54,5 @@ experiment:
     pin_memory: True
 logger:
   name: "wandb"
-  offline: True
+  offline: False
   project_name: "master-thesis"
