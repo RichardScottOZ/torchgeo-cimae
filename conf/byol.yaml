@@ -4,7 +4,7 @@ trainer:
   max_epochs: 100
   benchmark: True
 experiment:
-  task: "ssl"
+  task: "byol"
   name: "test_byol"
   module:
     model: "byol"
