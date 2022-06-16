@@ -143,7 +143,7 @@ class EmbeddingEvaluator(LightningModule):
         """."""
         batch = args[0]
         x = batch["image"]
-        y = batch["mask"].squeeze()
+        y = batch["label"].squeeze()
 
         with torch.no_grad():
             embeddings = self.get_embeddings(x)
@@ -158,7 +158,7 @@ class EmbeddingEvaluator(LightningModule):
         """."""
         batch = args[0]
         x = batch["image"]
-        y = batch["mask"].squeeze()
+        y = batch["label"].squeeze()
 
         embeddings = self.get_embeddings(x)
 
@@ -171,7 +171,7 @@ class EmbeddingEvaluator(LightningModule):
         """TODO: Docstring."""
         batch = args[0]
         x = batch["image"]
-        y = batch["mask"].squeeze()
+        y = batch["label"].squeeze()
 
         embeddings = self.get_embeddings(x)
 
