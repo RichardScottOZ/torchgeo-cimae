@@ -7,7 +7,12 @@ from typing import Any, List, Type, Union
 
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url
-from torchvision.models.resnet import BasicBlock, Bottleneck, ResNet
+from torchvision.models.resnet import (
+    BasicBlock,
+    Bottleneck,
+    ResNet,
+    _resnet as _resnet_tv,
+)
 
 MODEL_URLS = {
     "sentinel2": {
@@ -30,6 +35,7 @@ def _resnet(
     block: Union[BasicBlock, Bottleneck],
     layers: List[int],
     pretrained: bool,
+    imagenet_pretrained: bool,
     progress: bool,
     **kwargs: Any,
 ) -> ResNet:
@@ -52,17 +58,42 @@ def _resnet(
         A ResNet model
     """
     # Initialize a new model
-    model = ResNet(block, layers, NUM_CLASSES[sensor], **kwargs)
+    num_classes = NUM_CLASSES[sensor] if not imagenet_pretrained else 1000
+    model = _resnet_tv(
+        arch,
+        block,
+        layers,
+        pretrained=imagenet_pretrained,
+        num_classes=num_classes,
+        progress=progress,
+        **kwargs,
+    )
 
     # Replace the first layer with the correct number of input channels
-    model.conv1 = nn.Conv2d(
+    first_layer = model.conv1
+    new_first_layer = nn.Conv2d(
         IN_CHANNELS[sensor][bands],
-        out_channels=64,
-        kernel_size=7,
-        stride=1,
-        padding=2,
-        bias=False,
+        out_channels=first_layer.out_channels,
+        kernel_size=first_layer.kernel_size,
+        stride=first_layer.stride,
+        padding=first_layer.padding,
+        bias=first_layer.bias,
     )
+
+    if imagenet_pretrained:
+        # initialize the weights from new channel with the red channel weights
+        copy_weights = 0
+        # Copying the weights from the old to the new layer
+        new_first_layer.weight[
+            :, : first_layer.in_channels
+        ].data = first_layer.weight.clone()
+        # Copying the weights of the old layer to the extra channels
+        for channel_index in range(first_layer.in_channels, IN_CHANNELS[sensor][bands]):
+            new_first_layer.weight[
+                :, channel_index : channel_index + 1
+            ].data = first_layer.weight[:, copy_weights : copy_weights + 1].clone()
+
+    model.conv1 = new_first_layer
 
     # Load pretrained weights
     # TODO: Add naip model_url
@@ -81,6 +112,7 @@ def resnet18(
     block: Union[BasicBlock, Bottleneck] = BasicBlock,
     layers: List[int] = [2, 2, 2, 2],
     pretrained: bool = False,
+    imagenet_pretrained: bool = False,
     progress: bool = True,
     **kwargs: Any,
 ) -> ResNet:
@@ -100,7 +132,15 @@ def resnet18(
         A ResNet-18 model
     """
     return _resnet(
-        sensor, bands, "resnet18", block, layers, pretrained, progress, **kwargs
+        sensor,
+        bands,
+        "resnet18",
+        block,
+        layers,
+        pretrained,
+        imagenet_pretrained,
+        progress,
+        **kwargs,
     )
 
 
@@ -108,6 +148,7 @@ def resnet50(
     sensor: str,
     bands: str,
     pretrained: bool = False,
+    imagenet_pretrained: bool = False,
     progress: bool = True,
     **kwargs: Any,
 ) -> ResNet:
@@ -133,6 +174,7 @@ def resnet50(
         Bottleneck,
         [3, 4, 6, 3],
         pretrained,
+        imagenet_pretrained,
         progress,
         **kwargs,
     )
