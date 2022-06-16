@@ -14,7 +14,7 @@ experiment:
     encoder_name: "resnet18"
     sensor: "naip"
     patch_size: 50
-    imagenet_pretraining: False
+    imagenet_pretrained: False
     pretrained: False
     lr: 0.001
     betas:

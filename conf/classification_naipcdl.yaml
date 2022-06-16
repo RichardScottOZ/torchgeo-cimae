@@ -1,35 +1,29 @@
 trainer:
   gpus: 1
-  max_epochs: 20
+  max_epochs: 50
   precision: 16
   benchmark: True
 experiment:
-  task: "tile2vec_naipcdl_evaluate"
-  name: "tile2vec_naipcdl_evaluate"
+  task: "classification_naipcdl"
+  name: "classification_naipcdl"
   run:
     fit: True
-    test: True
+    test: False
   module:
-    task_name: "tile2vec"
-    model: "tile2vec"
-    encoder_name: "resnet18"
-    sensor: "naip"
-    num_classes: 255
-    patch_size: 50
-    checkpoint_path: ""
-    imagenet_pretrained: False
-    lr: 0.02
-    momentum: 0.9
-    weight_decay: 0.000001
-    project: False
-    projector_embeddings: False
+    loss: "ce"
+    classification_model: "resnet18"
+    model: "classification"
+    encoder_name: ${experiment.module.classification_model}
+    learning_rate: 1e-3
     learning_rate_schedule_patience: 6
+    weights: "random"
+    in_channels: 4
+    num_classes: 255
   datamodule:
     naip_root_dir: "/scratch/NAIP"
-    cdl_root_dir: "/scratch/CDL"
     batch_size: 256
-    train_length: 10000
-    val_length: 1250
+    train_length: 100000
+    val_length: 15000
     test_length: 10000
     num_workers: 4
     patch_size: 50
@@ -44,7 +38,7 @@ experiment:
       - "2017-01-01"
       - "EPSG:4326"
       - "EPSG:26911"
-    train_sampler_class: "RandomGeoSampler"
+    train_sampler_class: "RandomBatchGeoSampler"
     val_sampler_class: "RandomGeoSampler"
     test_sampler_class: "RandomGeoSampler"
     val_pct: 0.14

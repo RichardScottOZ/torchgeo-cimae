@@ -8,10 +8,15 @@
 import os
 from typing import Any, Dict, List, Tuple, Type, cast
 
-import pytorch_lightning as pl
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import ConfigAttributeError
-from pytorch_lightning import loggers as pl_loggers
+from pytorch_lightning import (
+    LightningModule,
+    LightningDataModule,
+    Trainer,
+    seed_everything,
+    loggers as pl_loggers,
+)
 from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 
 from torchgeo.datamodules import (
@@ -42,7 +47,7 @@ from torchgeo.trainers import (
 )
 
 TASK_TO_MODULES_MAPPING: Dict[
-    str, Tuple[Type[pl.LightningModule], Type[pl.LightningDataModule]]
+    str, Tuple[Type[LightningModule], Type[LightningDataModule]]
 ] = {
     "bigearthnet": (MultiLabelClassificationTask, BigEarthNetDataModule),
     "byol": (BYOLTask, ChesapeakeCVPRDataModule),
@@ -61,6 +66,7 @@ TASK_TO_MODULES_MAPPING: Dict[
     "ucmerced": (ClassificationTask, UCMercedDataModule),
     "tile2vec_naipcdl_train": (Tile2VecTask, NAIPCDLDataModule),
     "tile2vec_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
+    "classification_naipcdl": (ClassificationTask, NAIPCDLDataModule),
 }
 
 
@@ -130,13 +136,19 @@ def main(conf: DictConfig) -> None:
     run_name = (
         f"{conf.experiment.module.model}-{conf.experiment.module.encoder_name}"
         f"{'-project' if conf.experiment.module.project else ''}"
-        f"{'-imagenet_pretraining' if conf.experiment.module.imagenet_pretraining else ''}"
+        f"{'-imagenet_pretrained' if conf.experiment.module.imagenet_pretrained else ''}"
     )
     try:
-        if conf.experiment.module.checkpoint_path == '':
-            run_name += '-untrained'
+        if conf.experiment.module.projector_embeddings:
+            run_name += "-projector_embeddings"
+    except ConfigAttributeError:
+        pass
+
+    try:
+        if conf.experiment.module.checkpoint_path == "":
+            run_name += "-untrained"
         else:
-            run_name += '-trained'
+            run_name += "-trained"
     except ConfigAttributeError:
         pass
 
@@ -174,8 +186,8 @@ def main(conf: DictConfig) -> None:
         Dict[str, Any], OmegaConf.to_object(conf.experiment.datamodule)
     )
 
-    datamodule: pl.LightningDataModule
-    task: pl.LightningModule
+    datamodule: LightningDataModule
+    task: LightningModule
     if task_name in TASK_TO_MODULES_MAPPING:
         task_class, datamodule_class = TASK_TO_MODULES_MAPPING[task_name]
         task = task_class(**task_args)
@@ -226,7 +238,7 @@ def main(conf: DictConfig) -> None:
     trainer_args["callbacks"] = callbacks
     trainer_args["logger"] = logger
     trainer_args["default_root_dir"] = experiment_dir
-    trainer = pl.Trainer(**trainer_args)
+    trainer = Trainer(**trainer_args)
 
     if trainer_args.get("auto_lr_find"):
         trainer.tune(model=task, datamodule=datamodule)
@@ -245,7 +257,7 @@ if __name__ == "__main__":
     _rasterio_best_practices = {
         "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
         "AWS_NO_SIGN_REQUEST": "YES",
-        "GDAL_CACHE_MAX": "10000",
+        "GDAL_CACHEMAX": "10000",
         "GDAL_MAX_RAW_BLOCK_CACHE_SIZE": "200000000",
         "GDAL_SWATH_SIZE": "200000000",
         "VSI_CURL_CACHE_SIZE": "200000000",
@@ -256,7 +268,7 @@ if __name__ == "__main__":
 
     # Set random seed for reproducibility
     # https://pytorch-lightning.readthedocs.io/en/latest/api/pytorch_lightning.utilities.seed.html#pytorch_lightning.utilities.seed.seed_everything
-    pl.seed_everything(conf.program.seed)
+    seed_everything(conf.program.seed)
 
     # Main training procedure
     main(conf)
