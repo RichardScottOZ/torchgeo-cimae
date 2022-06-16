@@ -281,8 +281,8 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         Returns:
             preprocessed CDL data
         """
-        sample["mask"] = sample["mask"].long()[0]
-        sample["mask"] = sample["mask"].mode()[0].mode()[0].unsqueeze(0)
+        sample["label"] = sample["mask"].long()[0]
+        sample["label"] = sample["label"].mode()[0].mode()[0].unsqueeze(0)
 
         del sample["bbox"]
 
