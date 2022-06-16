@@ -80,6 +80,7 @@ class Augmentations(Module):
 
         Args:
             image_size: Tuple of integers defining the image size
+            device: Device used
         """
         super().__init__()
         self.size = image_size
@@ -177,27 +178,26 @@ class Tile2VecTask(LightningModule):
     def config_task(self, **kwargs: Any) -> None:
         """TODO: Docstring."""
         pretrained = self.hyperparams.get("pretrained", False)
-        imagenet_pretraining = self.hyperparams.get("imagenet_pretraining", False)
+        imagenet_pretrained = self.hyperparams.get("imagenet_pretrained", False)
         sensor = self.hyperparams["sensor"]
         bands = self.hyperparams.get("bands", "all")
         encoder = None
 
         if self.hyperparams["encoder_name"] == "resnet18":
-            if imagenet_pretraining:
-                encoder = _resnet("resnet18", BasicBlock, [2, 2, 2, 2], True, True)
-            else:
-                encoder = resnet18(
-                    sensor=sensor,
-                    bands=bands,
-                    block=BasicBlock,
-                    layers=[2, 2, 2, 2],
-                    pretrained=pretrained,
-                )
+            encoder = resnet18(
+                sensor=sensor,
+                bands=bands,
+                block=BasicBlock,
+                pretrained=pretrained,
+                imagenet_pretrained=imagenet_pretrained,
+            )
         elif self.hyperparams["encoder_name"] == "resnet50":
-            if imagenet_pretraining:
-                encoder = _resnet("resnet50", Bottleneck, [3, 4, 6, 3], True, True)
-            else:
-                encoder = resnet50(sensor=sensor, bands=bands, pretrained=pretrained)
+            encoder = resnet50(
+                sensor=sensor,
+                bands=bands,
+                pretrained=pretrained,
+                imagenet_pretrained=imagenet_pretrained,
+            )
         else:
             raise ValueError(
                 f"Encoder type '{self.hyperparams['encoder_name']}' is not valid."
@@ -295,9 +295,6 @@ class Tile2VecTask(LightningModule):
         """TODO: Docstring."""
         batch = args[0]
         x = batch["image"]
-
-        if self.hyperparams.get("imagenet_pretraining", False):
-            x = x[:, :3]
 
         with torch.no_grad():
             anchor = self.augment(x[:, 0])
