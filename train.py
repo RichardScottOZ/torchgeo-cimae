@@ -133,11 +133,19 @@ def main(conf: DictConfig) -> None:
 
     experiment_name = conf.experiment.name
     task_name = conf.experiment.task
-    run_name = (
-        f"{conf.experiment.module.model}-{conf.experiment.module.encoder_name}"
-        f"{'-project' if conf.experiment.module.project else ''}"
-        f"{'-imagenet_pretrained' if conf.experiment.module.imagenet_pretrained else ''}"
-    )
+    run_name = f"{conf.experiment.module.model}-{conf.experiment.module.encoder_name}"
+    try:
+        if conf.experiment.module.project:
+            run_name += '-project'
+    except ConfigAttributeError:
+        pass
+    
+    try:
+        if conf.experiment.module.imagenet_pretrained:
+            run_name += '-imagenet_pretrained'
+    except ConfigAttributeError:
+        pass
+
     try:
         if conf.experiment.module.projector_embeddings:
             run_name += "-projector_embeddings"
