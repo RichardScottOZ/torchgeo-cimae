@@ -108,39 +108,6 @@ class Augmentations(Module):
         return cast(Tensor, self.augmentation(x))
 
 
-class MLP(Module):
-    """MLP used in the BYOL projection head."""
-
-    def __init__(
-        self, dim: int, projection_size: int = 256, hidden_size: int = 4096
-    ) -> None:
-        """Initializes the MLP projection head.
-
-        Args:
-            dim: size of layer to project
-            projection_size: size of the output layer
-            hidden_size: size of the hidden layer
-        """
-        super().__init__()
-        self.mlp = Sequential(
-            Linear(dim, hidden_size),
-            BatchNorm1d(hidden_size),  # type: ignore[no-untyped-call]
-            ReLU(inplace=True),
-            Linear(hidden_size, projection_size),
-        )
-
-    def forward(self, x: Tensor) -> Tensor:
-        """Forward pass of the MLP model.
-
-        Args:
-            x: batch of imagery
-
-        Returns:
-            embedded version of the input
-        """
-        return cast(Tensor, self.mlp(x))
-
-
 class Tile2Vec(Module):
     """Tile2Vec implementation.
 
