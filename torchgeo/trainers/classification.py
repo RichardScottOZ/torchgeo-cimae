@@ -146,7 +146,7 @@ class ClassificationTask(pl.LightningModule):
         """
         batch = args[0]
         x = batch["image"]
-        y = batch["label"]
+        y = batch["label"].squeeze()
         y_hat = self.forward(x)
         y_hat_hard = y_hat.argmax(dim=1)
 
@@ -178,7 +178,7 @@ class ClassificationTask(pl.LightningModule):
         batch = args[0]
         batch_idx = args[1]
         x = batch["image"]
-        y = batch["label"]
+        y = batch["label"].squeeze()
         y_hat = self.forward(x)
         y_hat_hard = y_hat.argmax(dim=1)
 
@@ -219,7 +219,7 @@ class ClassificationTask(pl.LightningModule):
         """
         batch = args[0]
         x = batch["image"]
-        y = batch["label"]
+        y = batch["label"].squeeze()
         y_hat = self.forward(x)
         y_hat_hard = y_hat.argmax(dim=1)
 
@@ -324,7 +324,7 @@ class MultiLabelClassificationTask(ClassificationTask):
         """
         batch = args[0]
         x = batch["image"]
-        y = batch["label"]
+        y = batch["label"].squeeze()
         y_hat = self.forward(x)
         y_hat_hard = torch.softmax(y_hat, dim=-1)
 
@@ -347,7 +347,7 @@ class MultiLabelClassificationTask(ClassificationTask):
         batch = args[0]
         batch_idx = args[1]
         x = batch["image"]
-        y = batch["label"]
+        y = batch["label"].squeeze()
         y_hat = self.forward(x)
         y_hat_hard = torch.softmax(y_hat, dim=-1)
 
@@ -379,7 +379,7 @@ class MultiLabelClassificationTask(ClassificationTask):
         """
         batch = args[0]
         x = batch["image"]
-        y = batch["label"]
+        y = batch["label"].squeeze()
         y_hat = self.forward(x)
         y_hat_hard = torch.softmax(y_hat, dim=-1)
 

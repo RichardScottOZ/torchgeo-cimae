@@ -19,6 +19,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.models import resnet18
 from torchvision.models.resnet import resnet50
 
+from ..utils import _to_tuple
+
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
 Module.__module__ = "torch.nn"
@@ -94,7 +96,9 @@ class SimCLRAugmentation(Module):
             # RandomApply(K.ColorJitter(0.8, 0.8, 0.8, 0.2), p=0.8),
             # K.RandomGrayscale(p=0.2),
             K.RandomHorizontalFlip(),
-            RandomApply(filters.GaussianBlur2d((3, 3), (1.5, 1.5)), p=0.1),
+            K.ImageSequential(
+                filters.GaussianBlur2d((3, 3), (1.5, 1.5)), random_apply_weights=[0.1]
+            ),
             K.RandomResizedCrop(size=image_size),
         )
 
@@ -157,9 +161,9 @@ class EncoderWrapper(Module):
     def __init__(
         self,
         model: Module,
+        projector_dim: int,
         projection_size: int = 256,
         hidden_size: int = 4096,
-        layer: int = -2,
     ) -> None:
         """Initializes EncoderWrapper.
 
@@ -172,49 +176,7 @@ class EncoderWrapper(Module):
         super().__init__()
 
         self.model = model
-        self.projection_size = projection_size
-        self.hidden_size = hidden_size
-        self.layer = layer
-
-        self._projector: Optional[Module] = None
-        self._projector_dim: Optional[int] = None
-        self._encoded = torch.empty(0)
-        self._register_hook()
-
-    @property
-    def projector(self) -> Module:
-        """Wrapper module for the projector head."""
-        assert self._projector_dim is not None
-        if self._projector is None:
-            self._projector = MLP(
-                self._projector_dim, self.projection_size, self.hidden_size
-            )
-        return self._projector
-
-    def _hook(self, module: Any, input: Any, output: Tensor) -> None:
-        """Hook to record the activations at the projection layer.
-
-        See the following docs page for more details on hooks:
-        https://pytorch.org/docs/stable/generated/torch.nn.modules.module.register_module_forward_hook.html
-
-        Args:
-            module: the calling module
-            input: input to the module this hook was registered to
-            output: output from the module this hook was registered to
-        """
-        output = output.flatten(start_dim=1)
-        if self._projector_dim is None:
-            # If we haven't already, measure the output size
-            self._projector_dim = output.shape[-1]
-
-        # Project the output to get encodings, the projector model is created the first
-        # time this is called
-        self._encoded = self.projector(output)
-
-    def _register_hook(self) -> None:
-        """Register a hook for layer that we will extract features from."""
-        layer = list(self.model.children())[self.layer]
-        layer.register_forward_hook(self._hook)
+        self.projector = MLP(projector_dim, projection_size, hidden_size)
 
     def forward(self, x: Tensor) -> Tensor:
         """Pass through the model, and collect the representation from our forward hook.
@@ -225,8 +187,8 @@ class EncoderWrapper(Module):
         Returns:
             output from the model
         """
-        _ = self.model(x)
-        return self._encoded
+        output: Tensor = self.projector(self.model(x).squeeze())
+        return output
 
 
 class BYOL(Module):
@@ -243,12 +205,11 @@ class BYOL(Module):
     def __init__(
         self,
         model: Module,
+        projector_dim: int,
         image_size: Tuple[int, int] = (256, 256),
-        hidden_layer: int = -2,
         in_channels: int = 4,
         projection_size: int = 256,
         hidden_size: int = 4096,
-        augment_fn: Optional[Module] = None,
         beta: float = 0.99,
         **kwargs: Any,
     ) -> None:
@@ -259,7 +220,6 @@ class BYOL(Module):
             image_size: the size of the training images
             hidden_layer: the hidden layer in ``model`` to attach the projection
                 head to, can be the name of the layer or index of the layer
-            in_channels: number of input channels to the model
             projection_size: size of first layer of the projection MLP
             hidden_size: size of the hidden layer of the projection MLP
             augment_fn: an instance of a module that performs data augmentation
@@ -268,24 +228,14 @@ class BYOL(Module):
         """
         super().__init__()
 
-        self.augment: Module
-        if augment_fn is None:
-            self.augment = SimCLRAugmentation(image_size)
-        else:
-            self.augment = augment_fn
-
         self.beta = beta
-        self.in_channels = in_channels
         self.encoder = EncoderWrapper(
-            model, projection_size, hidden_size, layer=hidden_layer
+            model, projector_dim, projection_size, hidden_size
         )
         self.predictor = MLP(projection_size, projection_size, hidden_size)
         self.target = EncoderWrapper(
-            model, projection_size, hidden_size, layer=hidden_layer
+            model, projector_dim, projection_size, hidden_size
         )
-
-        # Perform a single forward pass to initialize the wrapper correctly
-        self.encoder(torch.zeros(2, self.in_channels, *image_size))
 
     def forward(self, x: Tensor) -> Tensor:
         """Forward pass of the encoder model through the MLP and prediction head.
@@ -347,7 +297,15 @@ class BYOLTask(LightningModule):
             )
 
         encoder.conv1 = new_layer
-        self.model = BYOL(encoder, in_channels=in_channels, image_size=(256, 256))
+        projector_dim = encoder.fc.weight.shape[1]
+        encoder = Sequential(*(list(encoder.children())[:-1]))
+
+        self.model = BYOL(
+            encoder,
+            projector_dim=projector_dim,
+            in_channels=in_channels,
+            image_size=self.hyperparams.get("image_size", (256, 256)),
+        )
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize a LightningModule for pre-training a model with BYOL.
@@ -368,6 +326,15 @@ class BYOLTask(LightningModule):
         self.hyperparams = cast(Dict[str, Any], self.hparams)
 
         self.config_task()
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        """Configures the task based on kwargs parameters passed to the constructor."""
+        patch_size = self.hyperparams.get("patch_size", (256, 256))
+        patch_size = _to_tuple(patch_size)
+
+        self.augment = self.hyperparams.get(
+            "augment_fn", SimCLRAugmentation(patch_size)
+        )
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         """Forward pass of the model.
@@ -415,7 +382,7 @@ class BYOLTask(LightningModule):
         batch = args[0]
         x = batch["image"]
         with torch.no_grad():
-            x1, x2 = self.model.augment(x), self.model.augment(x)
+            x1, x2 = self.augment(x), self.augment(x)
 
         pred1, pred2 = self.forward(x1), self.forward(x2)
         with torch.no_grad():
@@ -435,7 +402,7 @@ class BYOLTask(LightningModule):
         """
         batch = args[0]
         x = batch["image"]
-        x1, x2 = self.model.augment(x), self.model.augment(x)
+        x1, x2 = self.augment(x), self.augment(x)
         pred1, pred2 = self.forward(x1), self.forward(x2)
         targ1, targ2 = self.model.target(x1), self.model.target(x2)
         loss = torch.mean(normalized_mse(pred1, targ2) + normalized_mse(pred2, targ1))

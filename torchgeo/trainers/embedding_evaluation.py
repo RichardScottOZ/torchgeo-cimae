@@ -16,12 +16,15 @@ from torchgeo.models import ResNet18
 from .byol import BYOLTask
 from .tile2vec import Tile2VecTask
 
+
 class EmbeddingEvaluator(LightningModule):
     """Class for pre-training any PyTorch model using Tile2Vec."""
 
     def config_task(self) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
         """Configures the task based on kwargs parameters passed to the constructor."""
+        self.projector: Optional[Module] = None
+
         if self.hyperparams["task_name"] == "tile2vec":
             if "checkpoint_path" in self.hyperparams and isfile(
                 self.hyperparams["checkpoint_path"]
@@ -35,7 +38,6 @@ class EmbeddingEvaluator(LightningModule):
             task.freeze()
             self.encoder = task.model.encoder
 
-            self.projector: Optional[Module] = None
             if self.hyperparams.get("projector_embeddings", False):
                 self.projector = task.projector
         elif self.hyperparams["task_name"] == "tile2vec-original":
@@ -54,7 +56,8 @@ class EmbeddingEvaluator(LightningModule):
             else:
                 task = BYOLTask(**self.hyperparams)
             task.freeze()
-            self.encoder = task.model.encoder
+            self.encoder = task.model.encoder.model
+
         else:
             raise ValueError(
                 f"Task type '{self.hyperparams['task_name']}' is not valid."
@@ -132,7 +135,7 @@ class EmbeddingEvaluator(LightningModule):
 
     def get_embeddings(self, x: Tensor) -> Tensor:
         """TODO: Docstring."""
-        embeddings = self.encoder(x).squeeze()
+        embeddings: Tensor = self.encoder(x).squeeze()
 
         if self.projector is not None:
             embeddings = self.projector(embeddings)

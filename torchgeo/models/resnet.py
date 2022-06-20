@@ -7,12 +7,8 @@ from typing import Any, List, Type, Union
 
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url
-from torchvision.models.resnet import (
-    BasicBlock,
-    Bottleneck,
-    ResNet,
-    _resnet as _resnet_tv,
-)
+from torchvision.models.resnet import BasicBlock, Bottleneck, ResNet
+from torchvision.models.resnet import _resnet as _resnet_tv
 
 MODEL_URLS = {
     "sentinel2": {
