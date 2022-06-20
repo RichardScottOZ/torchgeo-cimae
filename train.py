@@ -10,13 +10,9 @@ from typing import Any, Dict, List, Tuple, Type, cast
 
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import ConfigAttributeError
-from pytorch_lightning import (
-    LightningModule,
-    LightningDataModule,
-    Trainer,
-    seed_everything,
-    loggers as pl_loggers,
-)
+from pytorch_lightning import LightningDataModule, LightningModule, Trainer
+from pytorch_lightning import loggers as pl_loggers
+from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 
 from torchgeo.datamodules import (
@@ -64,9 +60,11 @@ TASK_TO_MODULES_MAPPING: Dict[
     "sen12ms": (SemanticSegmentationTask, SEN12MSDataModule),
     "so2sat": (ClassificationTask, So2SatDataModule),
     "ucmerced": (ClassificationTask, UCMercedDataModule),
+    "classification_naipcdl": (ClassificationTask, NAIPCDLDataModule),
     "tile2vec_naipcdl_train": (Tile2VecTask, NAIPCDLDataModule),
     "tile2vec_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
-    "classification_naipcdl": (ClassificationTask, NAIPCDLDataModule),
+    "byol_naipcdl_train": (BYOLTask, NAIPCDLDataModule),
+    "byol_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
 }
 
 
@@ -136,13 +134,13 @@ def main(conf: DictConfig) -> None:
     run_name = f"{conf.experiment.module.model}-{conf.experiment.module.encoder_name}"
     try:
         if conf.experiment.module.project:
-            run_name += '-project'
+            run_name += "-project"
     except ConfigAttributeError:
         pass
-    
+
     try:
         if conf.experiment.module.imagenet_pretrained:
-            run_name += '-imagenet_pretrained'
+            run_name += "-imagenet_pretrained"
     except ConfigAttributeError:
         pass
 
@@ -193,6 +191,15 @@ def main(conf: DictConfig) -> None:
     datamodule_args = cast(
         Dict[str, Any], OmegaConf.to_object(conf.experiment.datamodule)
     )
+
+    try:
+        if len(ckpt_name := conf.experiment.module.load_checkpoint) > 0:
+            experiment_train_dir = experiment_dir.replace("evaluate", "train")
+            task_args["checkpoint_path"] = os.path.join(
+                experiment_train_dir, run_name, ckpt_name
+            )
+    except ConfigAttributeError:
+        pass
 
     datamodule: LightningDataModule
     task: LightningModule
