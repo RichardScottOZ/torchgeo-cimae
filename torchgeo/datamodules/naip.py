@@ -282,7 +282,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             preprocessed CDL data
         """
         sample["label"] = sample["mask"].long()[0]
-        sample["label"] = sample["label"].mode()[0].mode()[0].unsqueeze(0)
+        sample["label"] = sample["label"].flatten().mode()[0].unsqueeze(0)
 
         del sample["bbox"]
 
@@ -374,6 +374,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
                 num_workers=self.num_workers,
                 collate_fn=self.train_collate_fn,
                 pin_memory=self.pin_memory,
+                drop_last=True,
             )
         elif isinstance(self.train_sampler, BatchGeoSampler):
             return DataLoader(
@@ -398,6 +399,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
                 num_workers=self.num_workers,
                 collate_fn=self.val_collate_fn,
                 pin_memory=self.pin_memory,
+                drop_last=True,
             )
         elif isinstance(self.val_sampler, BatchGeoSampler):
             return DataLoader(
