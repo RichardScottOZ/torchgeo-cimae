@@ -9,6 +9,7 @@ from .embedding_evaluation import EmbeddingEvaluator
 from .regression import RegressionTask
 from .segmentation import SemanticSegmentationTask
 from .tile2vec import Tile2VecTask
+from .vicreg import VICRegTask
 
 __all__ = (
     "Tile2VecTask",
@@ -18,6 +19,7 @@ __all__ = (
     "RegressionTask",
     "SemanticSegmentationTask",
     "EmbeddingEvaluator",
+    "VICRegTask",
 )
 
 # https://stackoverflow.com/questions/40018681

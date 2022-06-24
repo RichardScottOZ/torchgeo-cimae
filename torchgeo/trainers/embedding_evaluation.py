@@ -15,6 +15,7 @@ from torchgeo.models import ResNet18
 
 from .byol import BYOLTask
 from .tile2vec import Tile2VecTask
+from .vicreg import VICRegTask
 
 
 class EmbeddingEvaluator(LightningModule):
@@ -41,8 +42,8 @@ class EmbeddingEvaluator(LightningModule):
             if self.hyperparams.get("projector_embeddings", False):
                 self.projector = task.projector
         elif self.hyperparams["task_name"] == "tile2vec-original":
-            checkpoint = torch.load(self.hyperparams["checkpoint_path"])
-            self.encoder = ResNet18()
+            checkpoint = torch.load(self.hyperparams["checkpoint_path"])  # type: ignore[no-untyped-call]
+            self.encoder = ResNet18()  # type: ignore[no-untyped-call]
             self.encoder.load_state_dict(checkpoint)
             self.encoder.eval()
         elif self.hyperparams["task_name"] == "byol":
@@ -57,7 +58,18 @@ class EmbeddingEvaluator(LightningModule):
                 task = BYOLTask(**self.hyperparams)
             task.freeze()
             self.encoder = task.model.encoder.model
-
+        elif self.hyperparams["task_name"] == "vicreg":
+            if "checkpoint_path" in self.hyperparams and isfile(
+                self.hyperparams["checkpoint_path"]
+            ):
+                task = VICRegTask.load_from_checkpoint(
+                    self.hyperparams["checkpoint_path"]
+                )
+                print(f"Loaded from checkpoint: {self.hyperparams['checkpoint_path']}")
+            else:
+                task = VICRegTask(**self.hyperparams)
+            task.freeze()
+            self.encoder = task.model.encoder
         else:
             raise ValueError(
                 f"Task type '{self.hyperparams['task_name']}' is not valid."
