@@ -3,10 +3,11 @@
 
 """Common sampler utilities."""
 
-from typing import Tuple, Union, Any, Sequence, Optional
+from decimal import Decimal
+from math import ceil, floor
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import torch
-from math import floor
 
 from ..datasets import BoundingBox
 
@@ -72,6 +73,7 @@ def get_random_bounding_box(
 def get_random_bounding_box_from_grid(
     block_bounds: BoundingBox,
     size: Union[Tuple[float, float], float],
+    res: float,
     block_size: Union[Tuple[float, float], float],
     bounds: Optional[BoundingBox] = None,
 ) -> BoundingBox:
@@ -91,26 +93,29 @@ def get_random_bounding_box_from_grid(
     Returns:
         randomly sampled bounding box from the extent of the input
     """
+
+    # TODO: CURRENT -> Wtf is this fucking precision
     t_size = _to_tuple(size)
     t_block_size = _to_tuple(block_size)
 
     if t_size > t_block_size:
         raise ValueError("Size is larger than block size.")
 
-    rands = torch.rand(4).numpy()
+    minx = block_bounds.minx
+    maxy = block_bounds.maxy
 
-    num_blocks_x = max(
-        ((block_bounds.maxx - block_bounds.minx) // t_block_size[0]) - 1, 0
-    )
-    num_blocks_y = max(
-        ((block_bounds.maxy - block_bounds.miny) // t_block_size[1]) - 1, 0
-    )
+    num_blocks_x = (block_bounds.maxx - block_bounds.minx) // res // t_block_size[0]
+    num_blocks_y = (block_bounds.maxy - block_bounds.miny) // res // t_block_size[1]
 
-    block_offset_x = floor(rands[0] * num_blocks_x)
-    block_offset_y = floor(rands[1] * num_blocks_y)
-    minx = block_bounds.minx + block_offset_x * t_block_size[0]
-    maxy = block_bounds.maxy - block_offset_y * t_block_size[1]
+    if num_blocks_x > 0:
+        block_offset_x = floor(torch.rand(1).item() * num_blocks_x)
+        minx += block_offset_x * t_block_size[0] * res
 
+    if num_blocks_y > 0:
+        block_offset_y = floor(torch.rand(1) * num_blocks_y)
+        maxy -= block_offset_y * t_block_size[1] * res
+
+    # TODO: Check again
     if bounds is not None:
         block = BoundingBox(
             minx,
@@ -129,13 +134,38 @@ def get_random_bounding_box_from_grid(
         minx = block_bounds.minx
         maxy = block_bounds.maxy
 
-    minx += rands[2] * (t_block_size[0] - t_size[0])
-    maxy -= rands[3] * (t_block_size[1] - t_size[1])
+    max_x_offset = t_block_size[0] - (t_size[0] // res)
+    max_y_offset = t_block_size[1] - (t_size[1] // res)
+
+    x_offset = torch.rand(1).item() * max_x_offset
+    y_offset = torch.rand(1).item() * max_y_offset
+
+    eps = 2
+    if eps < x_offset * 0.9:
+        minx -= eps * res
+    else:
+        minx += eps * res
+
+    if eps < y_offset * 0.9:
+        maxy += eps * res
+    else:
+        maxy -= eps * res
+
+    minx += x_offset * res
+    maxy -= y_offset * res
+
     maxx = minx + t_size[0]
     miny = maxy - t_size[1]
 
     query = BoundingBox(minx, maxx, miny, maxy, block_bounds.mint, block_bounds.maxt)
     return query
+
+
+# import time
+# start = time.perf_counter()
+# for _ in range(10000):
+#     (torch.rand(1) * 100).floor().item()
+# print((time.perf_counter() - start))
 
 
 def get_bounds_from_grid(
