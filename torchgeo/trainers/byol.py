@@ -233,9 +233,7 @@ class BYOL(Module):
             model, projector_dim, projection_size, hidden_size
         )
         self.predictor = MLP(projection_size, projection_size, hidden_size)
-        self.target = EncoderWrapper(
-            model, projector_dim, projection_size, hidden_size
-        )
+        self.target = EncoderWrapper(model, projector_dim, projection_size, hidden_size)
 
     def forward(self, x: Tensor) -> Tensor:
         """Forward pass of the encoder model through the MLP and prediction head.
@@ -260,7 +258,7 @@ class BYOLTask(LightningModule):
     def config_task(self) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
         in_channels = self.hyperparams["in_channels"]
-        pretrained = self.hyperparams["imagenet_pretraining"]
+        pretrained = self.hyperparams["imagenet_pretrained"]
         encoder = None
 
         if self.hyperparams["encoder_name"] == "resnet18":
@@ -313,7 +311,7 @@ class BYOLTask(LightningModule):
         Keyword Args:
             in_channels: number of channels on the input imagery
             encoder_name: either "resnet18" or "resnet50"
-            imagenet_pretraining: bool indicating whether to use imagenet pretrained
+            imagenet_pretrained: bool indicating whether to use imagenet pretrained
                 weights
 
         Raises:
