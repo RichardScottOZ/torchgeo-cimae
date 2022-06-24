@@ -15,7 +15,7 @@ experiment:
     encoder: "resnet18"
     encoder_name: ${experiment.module.encoder}
     in_channels: 4
-    imagenet_pretraining: True
+    imagenet_pretrained: True
     image_size:
       - 50
       - 50

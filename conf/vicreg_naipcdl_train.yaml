@@ -1,40 +1,38 @@
 trainer:
-  gpus: [1]
-  max_epochs: 20
+  gpus: 1
+  max_epochs: 50
   precision: 32
   benchmark: True
 experiment:
-  task: "byol_naipcdl_evaluate"
-  name: "byol_naipcdl_evaluate"
+  task: "vicreg_naipcdl_train"
+  name: "vicreg_naipcdl_train"
   run:
     fit: True
-    test: True
+    test: False
   module:
-    task_name: "byol"
-    model: "byol"
-    encoder: "resnet18"
-    encoder_name: ${experiment.module.encoder}
+    model: "vicreg"
+    encoder_name: "resnet18"
     sensor: "naip"
-    in_channels: 4
-    num_classes: 255
+    imagenet_pretrained: False
+    pretrained: False
+    projector_num_layers: 3
+    projection_dim: 2048
     image_size:
       - 50
       - 50
-    load_checkpoint: ""
-    imagenet_pretrained: False
-    lr: 0.02
+    lr: 0.0
+    min_lr: 0.002
     momentum: 0.9
-    weight_decay: 0.000001
-    project: False
-    projector_embeddings: False
-    learning_rate_schedule_patience: 6
+    eta: 0.001
+    weight_decay: 1e-6  # TODO: Add weight decay and adaption filter
+    invar_coeff: 25.0
+    var_coeff: 25.0
+    cov_coeff: 1.0
   datamodule:
     naip_root_dir: "/data/users/mike/data/NAIP"
-    cdl_root_dir: "/data/users/mike/data/CDL"
-    batch_size: 256
-    train_length: 10000
-    val_length: 1250
-    test_length: 10000
+    batch_size: 64
+    train_length: 100000
+    val_length: 15000
     num_workers: 4
     patch_size: 50
     dataset_split: "roi_split_grid"
@@ -50,7 +48,6 @@ experiment:
       - "EPSG:26911"
     train_sampler_class: "RandomGeoSampler"
     val_sampler_class: "RandomGeoSampler"
-    test_sampler_class: "RandomGeoSampler"
     val_pct: 0.14
     test_pct: 0.14
     cache: True
