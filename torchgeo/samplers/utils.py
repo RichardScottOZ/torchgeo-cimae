@@ -140,17 +140,6 @@ def get_random_bounding_box_from_grid(
     x_offset = torch.rand(1).item() * max_x_offset
     y_offset = torch.rand(1).item() * max_y_offset
 
-    eps = 2
-    if eps < x_offset * 0.9:
-        minx -= eps * res
-    else:
-        minx += eps * res
-
-    if eps < y_offset * 0.9:
-        maxy += eps * res
-    else:
-        maxy -= eps * res
-
     minx += x_offset * res
     maxy -= y_offset * res
 
@@ -159,13 +148,6 @@ def get_random_bounding_box_from_grid(
 
     query = BoundingBox(minx, maxx, miny, maxy, block_bounds.mint, block_bounds.maxt)
     return query
-
-
-# import time
-# start = time.perf_counter()
-# for _ in range(10000):
-#     (torch.rand(1) * 100).floor().item()
-# print((time.perf_counter() - start))
 
 
 def get_bounds_from_grid(

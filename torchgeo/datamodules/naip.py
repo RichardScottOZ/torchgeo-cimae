@@ -3,7 +3,7 @@
 
 """National Agriculture Imagery Program (NAIP) datamodule."""
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Type, Union
+from typing import Any, Dict, List, Optional
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
@@ -20,16 +20,9 @@ from ..datasets import (
     GeoDataset,
     create_bounding_box,
     stack_samples,
-    stack_triplet_samples,
 )
-from ..samplers.batch import (
-    BatchGeoSampler,
-    RandomBatchGeoSampler,
-    TripletBatchGeoSampler,
-    TripletTileBatchGeoSampler,
-)
+from ..samplers.batch import RandomBatchGeoSampler
 from ..samplers.single import GeoSampler, GridGeoSampler
-from .utils import roi_split_half
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
@@ -376,14 +369,14 @@ class NAIPCDLDataModule(pl.LightningDataModule):
                 pin_memory=self.pin_memory,
                 drop_last=True,
             )
-        elif isinstance(self.train_sampler, BatchGeoSampler):
-            return DataLoader(
-                self.dataset,
-                batch_sampler=self.train_sampler,
-                num_workers=self.num_workers,
-                collate_fn=self.train_collate_fn,
-                pin_memory=self.pin_memory,
-            )
+
+        return DataLoader(
+            self.dataset,
+            batch_sampler=self.train_sampler,
+            num_workers=self.num_workers,
+            collate_fn=self.train_collate_fn,
+            pin_memory=self.pin_memory,
+        )
 
     def val_dataloader(self) -> DataLoader[Any]:
         """Return a DataLoader for validation.
@@ -401,14 +394,14 @@ class NAIPCDLDataModule(pl.LightningDataModule):
                 pin_memory=self.pin_memory,
                 drop_last=True,
             )
-        elif isinstance(self.val_sampler, BatchGeoSampler):
-            return DataLoader(
-                self.dataset,
-                batch_sampler=self.val_sampler,
-                num_workers=self.num_workers,
-                collate_fn=self.val_collate_fn,
-                pin_memory=self.pin_memory,
-            )
+
+        return DataLoader(
+            self.dataset,
+            batch_sampler=self.val_sampler,
+            num_workers=self.num_workers,
+            collate_fn=self.val_collate_fn,
+            pin_memory=self.pin_memory,
+        )
 
     def test_dataloader(self) -> DataLoader[Any]:
         """Return a DataLoader for testing.
@@ -425,11 +418,11 @@ class NAIPCDLDataModule(pl.LightningDataModule):
                 collate_fn=self.test_collate_fn,
                 pin_memory=self.pin_memory,
             )
-        elif isinstance(self.test_sampler, BatchGeoSampler):
-            return DataLoader(
-                self.dataset,
-                batch_sampler=self.test_sampler,
-                num_workers=self.num_workers,
-                collate_fn=self.test_collate_fn,
-                pin_memory=self.pin_memory,
-            )
+
+        return DataLoader(
+            self.dataset,
+            batch_sampler=self.test_sampler,
+            num_workers=self.num_workers,
+            collate_fn=self.test_collate_fn,
+            pin_memory=self.pin_memory,
+        )
