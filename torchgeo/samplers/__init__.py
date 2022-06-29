@@ -10,6 +10,7 @@ from .batch import (
     TripletTileBatchGeoSampler,
 )
 from .block import (
+    RandomBlockGeoSampler,
     RandomBlockBatchGeoSampler,
     TripletBlockBatchGeoSampler,
     TripletTileBlockBatchGeoSampler,
@@ -32,6 +33,7 @@ __all__ = (
     # Constants
     "Units",
     # Block
+    "RandomBlockGeoSampler",
     "RandomBlockBatchGeoSampler",
     "TripletBlockBatchGeoSampler",
     "TripletTileBlockBatchGeoSampler",
