@@ -235,10 +235,10 @@ class RandomBlockGeoSampler(BlockGeoSampler):
         dataset: GeoDataset,
         size: Union[Tuple[float, float], float],
         block_size: Union[Tuple[float, float], float],
-        batch_size: int,
         length: int,
         roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
         units: Units = Units.PIXELS,
+        **kwargs: Any,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -252,7 +252,6 @@ class RandomBlockGeoSampler(BlockGeoSampler):
         Args:
             dataset: dataset to index from
             size: dimensions of each :term:`patch`
-            batch_size: number of samples per batch
             length: number of samples per epoch
             roi: region of interest to sample from (minx, maxx, miny, maxy, mint, maxt)
                 (defaults to the bounds of ``dataset.index``)
@@ -269,7 +268,6 @@ class RandomBlockGeoSampler(BlockGeoSampler):
         if units == Units.PIXELS:
             self.size = (self.size[0] * self.res, self.size[1] * self.res)
 
-        self.batch_size = batch_size
         self.length = length
         self.hits = []
         areas = []
@@ -312,7 +310,7 @@ class RandomBlockGeoSampler(BlockGeoSampler):
         Returns:
             number of batches in an epoch
         """
-        return self.length // self.batch_size
+        return self.length
 
 
 class RandomBlockBatchGeoSampler(BlockBatchGeoSampler):
@@ -331,6 +329,7 @@ class RandomBlockBatchGeoSampler(BlockBatchGeoSampler):
         length: int,
         roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
         units: Units = Units.PIXELS,
+        **kwargs: Any,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -465,7 +464,7 @@ class TripletBlockBatchGeoSampler(BlockBatchGeoSampler):
                 self.neighborhood[1] * self.res,
             )
 
-        super().__init__(dataset, self.block_size, roi)
+        super().__init__(dataset, roi)
 
         self.batch_size = batch_size
         self.length = length
@@ -503,7 +502,7 @@ class TripletBlockBatchGeoSampler(BlockBatchGeoSampler):
 
                 # Choose a random index within that tile
                 anchor_bbox = get_random_bounding_box_from_grid(
-                    anchor_bounds, self.size, self.block_size
+                    anchor_bounds, self.size, self.res, self.block_size
                 )
 
                 mid_x = anchor_bbox.minx + (anchor_bbox.maxx - anchor_bbox.minx) / 2
