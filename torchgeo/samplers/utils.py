@@ -94,59 +94,37 @@ def get_random_bounding_box_from_grid(
         randomly sampled bounding box from the extent of the input
     """
 
-    # TODO: CURRENT -> Wtf is this fucking precision
     t_size = _to_tuple(size)
     t_block_size = _to_tuple(block_size)
 
     if t_size > t_block_size:
         raise ValueError("Size is larger than block size.")
 
-    minx = block_bounds.minx
-    maxy = block_bounds.maxy
+    rands = torch.rand(4).tolist()
 
-    num_blocks_x = (block_bounds.maxx - block_bounds.minx) // res // t_block_size[0]
-    num_blocks_y = (block_bounds.maxy - block_bounds.miny) // res // t_block_size[1]
+    minx, maxx, miny, maxy, mint, maxt = block_bounds
+
+    num_blocks_x = (maxx - minx) // res // t_block_size[0]
+    num_blocks_y = (maxy - miny) // res // t_block_size[1]
 
     if num_blocks_x > 0:
-        block_offset_x = floor(torch.rand(1).item() * num_blocks_x)
+        block_offset_x = floor(rands[0] * num_blocks_x)
         minx += block_offset_x * t_block_size[0] * res
 
     if num_blocks_y > 0:
-        block_offset_y = floor(torch.rand(1) * num_blocks_y)
+        block_offset_y = floor(rands[1] * num_blocks_y)
         maxy -= block_offset_y * t_block_size[1] * res
-
-    # TODO: Check again
-    if bounds is not None:
-        block = BoundingBox(
-            minx,
-            minx + t_block_size[0],
-            maxy - t_block_size[1],
-            maxy,
-            block_bounds.mint,
-            block_bounds.maxt,
-        )
-        block_bounds = block & bounds
-        t_block_size = (
-            block_bounds.maxx - block_bounds.minx,
-            block_bounds.maxy - block_bounds.miny,
-        )
-
-        minx = block_bounds.minx
-        maxy = block_bounds.maxy
 
     max_x_offset = t_block_size[0] - (t_size[0] // res)
     max_y_offset = t_block_size[1] - (t_size[1] // res)
 
-    x_offset = torch.rand(1).item() * max_x_offset
-    y_offset = torch.rand(1).item() * max_y_offset
-
-    minx += x_offset * res
-    maxy -= y_offset * res
+    minx += rands[2] * max_x_offset * res
+    maxy -= rands[3] * max_y_offset * res
 
     maxx = minx + t_size[0]
     miny = maxy - t_size[1]
 
-    query = BoundingBox(minx, maxx, miny, maxy, block_bounds.mint, block_bounds.maxt)
+    query = BoundingBox(minx, maxx, miny, maxy, mint, maxt)
     return query
 
 
