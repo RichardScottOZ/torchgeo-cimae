@@ -1,0 +1,61 @@
+trainer:
+  gpus: [1]
+  max_epochs: 20
+  precision: 32
+  benchmark: True
+experiment:
+  task: "identity_naipcdl_evaluate"
+  name: "identity_naipcdl_evaluate"
+  run:
+    fit: True
+    test: True
+  module:
+    task_name: "identity"
+    model: "identity"
+    encoder_name: "identity"
+    sensor: "naip"
+    bands: "all"
+    patch_wise: True
+    patch_size: 16
+    in_channels: 4
+    num_classes: 255
+    image_size: 256
+    crop_size: 224
+    load_checkpoint: "last.ckpt"
+    imagenet_pretrained: False
+    lr: 0.02
+    momentum: 0.9
+    weight_decay: 0.000001
+    learning_rate_schedule_patience: 6
+  datamodule:
+    naip_root_dir: "/data/users/mike/data/NAIP"
+    cdl_root_dir: "/data/users/mike/data/CDL"
+    batch_size: 128
+    train_length: 10000
+    val_length: 1250
+    test_length: 10000
+    num_workers: 8
+    patch_size: 256
+    dataset_split: "roi_split_grid"
+    number_of_cells: 12
+    area_of_interest:
+      - -120.25
+      - -119.65
+      - 36.45
+      - 37.05
+      - "2016-01-01"
+      - "2017-01-01"
+      - "EPSG:4326"
+      - "EPSG:26911"
+    train_sampler_class: "RandomGeoSampler"
+    val_sampler_class: "RandomGeoSampler"
+    test_sampler_class: "RandomGeoSampler"
+    val_pct: 0.14
+    test_pct: 0.14
+    cache: True
+    cache_size: 75
+    pin_memory: True
+logger:
+  name: "wandb"
+  offline: False
+  project_name: "master-thesis"
