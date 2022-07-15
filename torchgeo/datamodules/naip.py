@@ -208,7 +208,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         cache: bool = True,
         cache_size: int = 128,
         pin_memory: bool = False,
-        block_size: int = 128,
+        block_size: int = 256,
         **kwargs: Any,
     ) -> None:
         """Initialize a LightningDataModule for NAIP and Chesapeake based DataLoaders.
@@ -333,6 +333,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             length=self.train_length,
             roi=train_roi,
+            block_size=self.block_size,
         )
 
         self.val_sampler = self.val_sampler_class(
@@ -342,6 +343,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             length=self.val_length,
             roi=val_roi,
+            block_size=self.block_size,
         )
 
         self.test_sampler = self.test_sampler_class(
@@ -351,6 +353,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             length=self.test_length,
             roi=test_roi,
+            block_size=self.block_size,
         )
 
     def train_dataloader(self) -> DataLoader[Any]:
@@ -359,7 +362,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         Returns:
             training data loader
         """
-        if isinstance(self.train_sampler, GeoSampler):
+        if self.train_sampler.__orig_bases__[0].__args__[0] is BoundingBox:
             return DataLoader(
                 self.dataset,
                 sampler=self.train_sampler,
@@ -384,7 +387,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         Returns:
             validation data loader
         """
-        if isinstance(self.val_sampler, GeoSampler):
+        if self.val_sampler.__orig_bases__[0].__args__[0] is BoundingBox:
             return DataLoader(
                 self.dataset,
                 sampler=self.val_sampler,
@@ -409,7 +412,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         Returns:
             testing data loader
         """
-        if isinstance(self.test_sampler, GeoSampler):
+        if self.test_sampler.__orig_bases__[0].__args__[0] is BoundingBox:
             return DataLoader(
                 self.dataset,
                 sampler=self.test_sampler,
