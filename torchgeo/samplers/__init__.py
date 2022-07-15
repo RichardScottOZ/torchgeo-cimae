@@ -10,8 +10,8 @@ from .batch import (
     TripletTileBatchGeoSampler,
 )
 from .block import (
-    RandomBlockGeoSampler,
     RandomBlockBatchGeoSampler,
+    RandomBlockGeoSampler,
     TripletBlockBatchGeoSampler,
     TripletTileBlockBatchGeoSampler,
 )

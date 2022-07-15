@@ -6,6 +6,7 @@
 from .byol import BYOLTask
 from .classification import ClassificationTask, MultiLabelClassificationTask
 from .embedding_evaluation import EmbeddingEvaluator
+from .mae import MAETask
 from .regression import RegressionTask
 from .segmentation import SemanticSegmentationTask
 from .tile2vec import Tile2VecTask

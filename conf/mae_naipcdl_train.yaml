@@ -1,0 +1,55 @@
+trainer:
+  gpus: [0]
+  max_epochs: 500
+  precision: 32
+  benchmark: True
+experiment:
+  task: "mae_naipcdl_train"
+  name: "mae_naipcdl_train"
+  run:
+    fit: True
+    test: False
+  module:
+    model: "mae"
+    encoder_name: "vit"
+    sensor: "naip"
+    imagenet_pretrained: False
+    pretrained: False
+    image_size: 256
+    crop_size: 224
+    patch_size: 16
+    embed_dim: 1024
+    depth: 4
+    num_heads: 1
+    decoder_depth: 1
+    decoder_num_heads: 1
+    decoder_embed_dim: 512
+  datamodule:
+    naip_root_dir: "/data/users/mike/data/NAIP"
+    batch_size: 128
+    train_length: 10000 #0
+    val_length: 1500 #0
+    num_workers: 8
+    patch_size: 256
+    dataset_split: "roi_split_grid"
+    number_of_cells: 12
+    area_of_interest:
+      - -120.25
+      - -119.65
+      - 36.45
+      - 37.05
+      - "2016-01-01"
+      - "2017-01-01"
+      - "EPSG:4326"
+      - "EPSG:26911"
+    train_sampler_class: "RandomGeoSampler"
+    val_sampler_class: "RandomGeoSampler"
+    val_pct: 0.14
+    test_pct: 0.14
+    cache: True
+    cache_size: 75
+    pin_memory: True
+logger:
+  name: "wandb"
+  offline: False
+  project_name: "master-thesis"

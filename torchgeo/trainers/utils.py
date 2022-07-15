@@ -5,8 +5,10 @@
 
 import warnings
 from collections import OrderedDict
-from typing import Optional, Tuple, Union, cast
+from typing import Any, Optional, Tuple, Union, cast
 
+import numpy as np
+import numpy.typing as npt
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -152,3 +154,35 @@ def reinit_initial_conv_layer(
             cast(Tensor, new_layer.bias).data = b_old
 
     return new_layer
+
+
+def patchify(imgs: Tensor, patch_size: int) -> Tensor:
+    """
+    imgs: (N, 3, H, W)
+    x: (N, L, patch_size**2 *3)
+    """
+    B, C, H, W = imgs.shape
+
+    assert H == W and H % patch_size == 0
+
+    h = w = H // patch_size
+    x = imgs.reshape(shape=(B, C, h, patch_size, w, patch_size))
+    x = torch.einsum("nchpwq->nhwpqc", x)  # type: ignore[no-untyped-call]
+    x = x.reshape(shape=(B, h * w, patch_size**2 * C))
+    return x
+
+
+def unpatchify(x: Tensor, patch_size: int) -> Tensor:
+    """
+    x: (N, L, patch_size**2 *3)
+    imgs: (N, 3, H, W)
+    """
+    B, P, E = x.shape
+
+    h = w = int(P**0.5)
+    assert h * w == P
+
+    x = x.reshape(shape=(B, h, w, patch_size, patch_size, -1))
+    x = torch.einsum("nhwpqc->nchpwq", x)  # type: ignore[no-untyped-call]
+    imgs = x.reshape(shape=(x.shape[0], -1, h * patch_size, h * patch_size))
+    return imgs

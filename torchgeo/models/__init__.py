@@ -7,6 +7,7 @@ from .changestar import ChangeMixin, ChangeStar, ChangeStarFarSeg
 from .farseg import FarSeg
 from .fcn import FCN
 from .fcsiam import FCSiamConc, FCSiamDiff
+from .maskedautoencodervit import MaskedAutoencoderViT
 from .rcf import RCF
 from .resnet import resnet18, resnet50
 from .tile2vec_resnet import ResNet18
@@ -23,6 +24,7 @@ __all__ = (
     "resnet50",
     "resnet18",
     "ResNet18",
+    "MaskedAutoencoderViT",
 )
 
 # https://stackoverflow.com/questions/40018681
