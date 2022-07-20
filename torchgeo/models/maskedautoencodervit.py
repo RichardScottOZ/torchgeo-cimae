@@ -1,23 +1,17 @@
 """MaskedVit."""
 
-from typing import Any, Callable, Dict, List, Tuple, cast
+from typing import cast
 
 import torch
 from kornia.contrib.vit import TransformerEncoderBlock
 from torch import Tensor
 from torch.nn import Conv2d, LayerNorm, Linear, Module, Sequential, init
-from torch.nn.functional import layer_norm
 from torch.nn.parameter import Parameter
 
-from .utils import focal_masking, get_2d_sincos_pos_embed, random_masking
+from .utils import get_2d_sincos_pos_embed
 
 IN_CHANNELS = {"sentinel2": {"all": 10}, "naip": {"all": 4}}
 NUM_CLASSES = {"sentinel2": 17, "naip": 0}
-
-MASKING_FUNCTIONS: Dict[str, Callable[..., Tensor]] = {
-    "random_masking": random_masking,
-    "focal_masking": focal_masking,
-}
 
 
 class TransformerEncoder(Module):
@@ -86,9 +80,7 @@ class EncoderEmbedding(Module):
         w = self.embedder.weight.data
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
 
-    def forward(
-        self, x: Tensor, mask_fn: List[str], **mask_kwargs: Dict[str, Any]
-    ) -> Tuple[Tensor, Tensor]:
+    def forward(self, x: Tensor) -> Tensor:
         """TODO: Docstring."""
         x = self.embedder(x)
         B, C, _, _ = x.shape
@@ -96,14 +88,7 @@ class EncoderEmbedding(Module):
 
         x += self.positional_embeddings
 
-        _, P, _ = x.shape
-        ids_keep = torch.arange(P, device=x.device)
-        for masking_name in mask_fn:
-            ids_keep = MASKING_FUNCTIONS[masking_name](x, ids_keep, **mask_kwargs)
-
-        x = x.index_select(1, ids_keep)
-
-        return x, ids_keep
+        return x
 
 
 class MaskedEncoderViT(Module):
@@ -123,6 +108,9 @@ class MaskedEncoderViT(Module):
         """Initialize a new VisionTransformer model."""
         super().__init__()
 
+        self.image_size = image_size
+        self.patch_size = patch_size
+
         self.embed_module = EncoderEmbedding(
             in_channels, embed_dim, patch_size, image_size
         )
@@ -135,7 +123,7 @@ class MaskedEncoderViT(Module):
 
         self.apply(self._init_weights)
 
-    def _init_weights(self, m: Tensor) -> None:
+    def _init_weights(self, m: Module) -> None:
         """Initialize the weights."""
         if isinstance(m, Linear):
             torch.nn.init.xavier_uniform_(m.weight)
@@ -145,18 +133,18 @@ class MaskedEncoderViT(Module):
             init.constant_(m.bias, 0)
             init.constant_(m.weight, 1.0)
 
-    def forward(
-        self,
-        x: Tensor,
-        mask_fn: List[Callable[..., Tensor]] = [],
-        mask_kwargs: Dict[str, Any] = {},
-    ) -> Tuple[Tensor, Tensor]:
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
         """Forward pass of the model."""
-        out, ids_keep = self.embed_module(x, mask_fn=mask_fn, **mask_kwargs)
+        out = self.embed_module(x)
+
+        if mask is not None:
+            B, _, H = out.shape
+            out = out[~mask].view(B, -1, H)
+
         out = self.encoder(out)
         out = self.norm(out)
 
-        return cast(Tensor, out), ids_keep
+        return cast(Tensor, out)
 
 
 class DecoderEmbedding(Module):
@@ -197,25 +185,26 @@ class DecoderEmbedding(Module):
     def _init_weights(self, m: Module) -> None:
         """Initialize the weights."""
         if isinstance(m, Linear):
-            # we use xavier_uniform following official JAX ViT:
-            torch.nn.init.xavier_uniform_(m.weight)
+            init.xavier_uniform_(m.weight)
             if isinstance(m, Linear) and m.bias is not None:
                 init.constant_(m.bias, 0)
         elif isinstance(m, LayerNorm):
             init.constant_(m.bias, 0)
             init.constant_(m.weight, 1.0)
 
-    def forward(self, x: Tensor, ids_keep: Tensor) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
         """TODO: Docstring."""
         x = self.embedder(x)
         B, _, _ = x.shape
 
-        x_masked = self.mask_token.repeat(B, self.num_patches, 1)
-        x_masked = x_masked.index_copy(1, ids_keep, x)
+        if mask is not None:
+            x_flat = x.flatten(0, 1)
+            x = self.mask_token.repeat(B, self.num_patches, 1)
+            x[~mask] = x_flat
 
-        x_masked += self.positional_embeddings
+        x += self.positional_embeddings
 
-        return x_masked
+        return x
 
 
 class MaskedDecoderViT(Module):
@@ -252,11 +241,25 @@ class MaskedDecoderViT(Module):
             hidden_dim, patch_size**2 * out_channels, bias=True
         )  # decoder to patch
 
-    def forward(self, x: Tensor, ids_keep: Tensor) -> Tensor:
+        self.norm = LayerNorm(hidden_dim)
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m: Module) -> None:
+        """Initialize the weights."""
+        if isinstance(m, Linear):
+            init.xavier_uniform_(m.weight)
+            if isinstance(m, Linear) and m.bias is not None:
+                init.constant_(m.bias, 0)
+        elif isinstance(m, LayerNorm):
+            init.constant_(m.bias, 0)
+            init.constant_(m.weight, 1.0)
+
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
         """Forward pass of the model."""
-        out = self.embed_module(x, ids_keep)
+        out = self.embed_module(x, mask)
         out = self.decoder(out)
-        out = layer_norm(out, [out.shape[-1]])
+        out = self.norm(out)
 
         out = self.predictor(out)
 
@@ -282,9 +285,14 @@ class MaskedAutoencoderViT(Module):
         decoder_num_heads: int = 16,
         decoder_dropout_rate: float = 0.0,
         decoder_dropout_attn: float = 0.0,
+        return_latent: bool = False,
     ) -> None:
         """Initialize a new VisionTransformer model."""
         super().__init__()
+
+        self.return_latent = return_latent
+        self.image_size = image_size
+        self.patch_size = patch_size
 
         self.encoder = MaskedEncoderViT(
             image_size=image_size,
@@ -311,20 +319,52 @@ class MaskedAutoencoderViT(Module):
         )
 
     def forward(
-        self,
-        x: Tensor,
-        mask_fn: List[Callable[..., Tensor]] = [],
-        mask_kwargs: Dict[str, Any] = {},
-    ) -> Tuple[Tensor, Tensor]:
+        self, x: Tensor, mask: Tensor | None = None
+    ) -> Tensor | tuple[Tensor, Tensor]:
         """Forward pass of the model."""
-        if not isinstance(mask_fn, List):
-            mask_fn = [mask_fn]
+        latent = self.encoder(x, mask)
+        pred: Tensor = self.decoder(latent, mask)
 
-        latent, ids_keep = self.encoder(x, mask_fn, mask_kwargs)
-        pred = self.decoder(latent, ids_keep)
+        if self.return_latent:
+            return pred, latent
 
-        B, P, _ = pred.shape
-        mask = torch.ones((B, P), device=pred.device, dtype=torch.bool)
-        mask = mask.index_fill(1, ids_keep, False)
+        return pred
 
-        return pred, mask
+
+class MaskedViT(Module):
+    """Vision transformer (ViT) module."""
+
+    def __init__(
+        self,
+        sensor: str,
+        bands: str,
+        image_size: int,
+        patch_size: int = 16,
+        embed_dim: int = 1024,
+        depth: int = 24,
+        num_heads: int = 16,
+        dropout_rate: float = 0.0,
+        dropout_attn: float = 0.0,
+    ) -> None:
+        """Initialize a new VisionTransformer model."""
+        super().__init__()
+
+        self.image_size = image_size
+        self.patch_size = patch_size
+
+        self.encoder = MaskedEncoderViT(
+            image_size=image_size,
+            patch_size=patch_size,
+            in_channels=IN_CHANNELS[sensor][bands],
+            embed_dim=embed_dim,
+            depth=depth,
+            num_heads=num_heads,
+            dropout_rate=dropout_rate,
+            dropout_attn=dropout_attn,
+        )
+
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
+        """Forward pass of the model."""
+        embedding = self.encoder(x, mask)
+
+        return cast(Tensor, embedding)

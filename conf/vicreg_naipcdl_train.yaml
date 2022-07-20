@@ -1,5 +1,5 @@
 trainer:
-  gpus: 1
+  gpus: [0]
   max_epochs: 50
   precision: 32
   benchmark: True
@@ -11,15 +11,20 @@ experiment:
     test: False
   module:
     model: "vicreg"
-    encoder_name: "resnet18"
+    # encoder_name: "resnet18"
+    encoder_name: "vit"
     sensor: "naip"
     imagenet_pretrained: False
     pretrained: False
+    image_size: 256
+    crop_size: 224
+    patch_wise: True
+    patch_size: 16    # ViT
+    embed_dim: 1024   # ViT
+    depth: 6          # ViT
+    num_heads: 1      # ViT
     projector_num_layers: 3
     projection_dim: 2048
-    image_size:
-      - 50
-      - 50
     lr: 0.0
     min_lr: 0.002
     momentum: 0.9
@@ -30,11 +35,11 @@ experiment:
     cov_coeff: 1.0
   datamodule:
     naip_root_dir: "/data/users/mike/data/NAIP"
-    batch_size: 64
+    batch_size: 128
     train_length: 100000
     val_length: 15000
-    num_workers: 4
-    patch_size: 50
+    num_workers: 8
+    patch_size: 256
     dataset_split: "roi_split_grid"
     number_of_cells: 12
     area_of_interest:
@@ -46,8 +51,8 @@ experiment:
       - "2017-01-01"
       - "EPSG:4326"
       - "EPSG:26911"
-    train_sampler_class: "RandomGeoSampler"
-    val_sampler_class: "RandomGeoSampler"
+    train_sampler_class: "RandomBlockGeoSampler"
+    val_sampler_class: "RandomBlockGeoSampler"
     val_pct: 0.14
     test_pct: 0.14
     cache: True

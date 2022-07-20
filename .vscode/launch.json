@@ -1,0 +1,215 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: test.py",
+            "type": "python",
+            "request": "launch",
+            "program": "test.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: tile2vec_naipcdl_evaluate",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/tile2vec_naipcdl_evaluate.yaml",
+                "program.seed=666",
+                "program.output_dir=/cluster/scratch/mboss/experiments",
+                "program.data_dir=/scratch/NAIP",
+                "program.log_dir=/cluster/scratch/mboss/logs",
+                "program.overwrite=True",
+                "experiment.module.encoder_name=resnet50",
+                "experiment.module.imagenet_pretrained=False",
+                "experiment.module.project=True",
+                "experiment.module.projector_embeddings=True",
+                "experiment.module.checkpoint_path=/cluster/scratch/mboss/experiments/tile2vec_naipcdl_train/tile2vec-resnet50-project/last.ckpt",
+                "logger.offline=True",
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: classification_naipcdl",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/classification_naipcdl.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "experiment.datamodule.cdl_root_dir=/data/users/mike/data/CDL",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=True",
+                "logger.offline=True",
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: vicreg_naipcdl_train",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/vicreg_naipcdl_train.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=True",
+                "logger.offline=True",
+                "trainer.gpus=[0]",
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: vicreg_naipcdl_evaluate",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/vicreg_naipcdl_evaluate.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=True",
+                "logger.offline=True",
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: test_blocks.py",
+            "type": "python",
+            "request": "launch",
+            "program": "test_blocks.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: mae_naipcdl_train",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/mae_naipcdl_train.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=True",
+                "logger.offline=True",
+                "trainer.gpus=[0]"
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: mae_naipcdl_evaluate",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/mae_naipcdl_evaluate.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=True",
+                "logger.offline=True",
+                "trainer.gpus=[0]",
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: msn_naipcdl_train",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/msn_naipcdl_train.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=True",
+                "logger.offline=True",
+                "trainer.gpus=[0]"
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: msn_naipcdl_evaluate",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/msn_naipcdl_evaluate.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=True",
+                "logger.offline=True",
+                "trainer.gpus=[0]",
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: msae_naipcdl_train",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/msae_naipcdl_train.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=True",
+                "logger.offline=True",
+                "trainer.gpus=[0]"
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: msae_naipcdl_evaluate",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/msae_naipcdl_evaluate.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=True",
+                "logger.offline=True",
+                "trainer.gpus=[0]",
+            ],
+            "justMyCode": true
+        },
+    ]
+}

@@ -36,10 +36,14 @@ from torchgeo.trainers import (
     BYOLTask,
     ClassificationTask,
     EmbeddingEvaluator,
+    MAETask,
+    MSAETask,
+    MSNTask,
     MultiLabelClassificationTask,
     RegressionTask,
     SemanticSegmentationTask,
     Tile2VecTask,
+    VICRegTask,
 )
 
 TASK_TO_MODULES_MAPPING: Dict[
@@ -61,10 +65,19 @@ TASK_TO_MODULES_MAPPING: Dict[
     "so2sat": (ClassificationTask, So2SatDataModule),
     "ucmerced": (ClassificationTask, UCMercedDataModule),
     "classification_naipcdl": (ClassificationTask, NAIPCDLDataModule),
+    "identity_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
     "tile2vec_naipcdl_train": (Tile2VecTask, NAIPCDLDataModule),
     "tile2vec_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
     "byol_naipcdl_train": (BYOLTask, NAIPCDLDataModule),
     "byol_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
+    "vicreg_naipcdl_train": (VICRegTask, NAIPCDLDataModule),
+    "vicreg_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
+    "mae_naipcdl_train": (MAETask, NAIPCDLDataModule),
+    "mae_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
+    "msn_naipcdl_train": (MSNTask, NAIPCDLDataModule),
+    "msn_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
+    "msae_naipcdl_train": (MSAETask, NAIPCDLDataModule),
+    "msae_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
 }
 
 

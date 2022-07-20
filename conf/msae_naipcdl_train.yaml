@@ -1,16 +1,16 @@
 trainer:
-  gpus: [1]
+  gpus: [0]
   max_epochs: 500
   precision: 32
   benchmark: True
 experiment:
-  task: "mae_naipcdl_train"
-  name: "mae_naipcdl_train"
+  task: "msae_naipcdl_train"
+  name: "msae_naipcdl_train"
   run:
     fit: True
     test: False
   module:
-    model: "mae"
+    model: "msae"
     encoder_name: "vit"
     sensor: "naip"
     imagenet_pretrained: False
@@ -26,7 +26,7 @@ experiment:
     decoder_embed_dim: 512
   datamodule:
     naip_root_dir: "/data/users/mike/data/NAIP"
-    batch_size: 128
+    batch_size: 64
     train_length: 10000 #0
     val_length: 1500 #0
     num_workers: 8

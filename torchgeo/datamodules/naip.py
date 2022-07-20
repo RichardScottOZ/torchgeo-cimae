@@ -349,7 +349,6 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         self.test_sampler = self.test_sampler_class(
             dataset=self.dataset,
             size=self.patch_size,
-            block_size=self.block_size,
             batch_size=self.batch_size,
             length=self.test_length,
             roi=test_roi,

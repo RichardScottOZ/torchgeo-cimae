@@ -1,34 +1,39 @@
 trainer:
   gpus: [1]
-  max_epochs: 500
+  max_epochs: 20
   precision: 32
   benchmark: True
 experiment:
-  task: "mae_naipcdl_train"
-  name: "mae_naipcdl_train"
+  task: "msae_naipcdl_evaluate"
+  name: "msae_naipcdl_evaluate"
   run:
     fit: True
-    test: False
+    test: True
   module:
-    model: "mae"
+    task_name: "msae"
+    model: "msae"
     encoder_name: "vit"
     sensor: "naip"
-    imagenet_pretrained: False
-    pretrained: False
+    bands: "all"
+    patch_wise: True
+    patch_size: 16
+    in_channels: 4
+    num_classes: 255
     image_size: 256
     crop_size: 224
-    patch_size: 16
-    embed_dim: 1024
-    depth: 6
-    num_heads: 1
-    decoder_depth: 2
-    decoder_num_heads: 1
-    decoder_embed_dim: 512
+    load_checkpoint: "last.ckpt"
+    imagenet_pretrained: False
+    lr: 0.02
+    momentum: 0.9
+    weight_decay: 0.000001
+    learning_rate_schedule_patience: 6
   datamodule:
     naip_root_dir: "/data/users/mike/data/NAIP"
+    cdl_root_dir: "/data/users/mike/data/CDL"
     batch_size: 128
-    train_length: 10000 #0
-    val_length: 1500 #0
+    train_length: 10000
+    val_length: 1250
+    test_length: 10000
     num_workers: 8
     patch_size: 256
     dataset_split: "roi_split_grid"
@@ -42,8 +47,9 @@ experiment:
       - "2017-01-01"
       - "EPSG:4326"
       - "EPSG:26911"
-    train_sampler_class: "RandomBlockGeoSampler"
-    val_sampler_class: "RandomBlockGeoSampler"
+    train_sampler_class: "RandomGeoSampler"
+    val_sampler_class: "RandomGeoSampler"
+    test_sampler_class: "RandomGeoSampler"
     val_pct: 0.14
     test_pct: 0.14
     cache: True
