@@ -1,63 +1,9 @@
 """Common model utilities."""
 
-from typing import Any
-
 import numpy as np
 import numpy.typing as npt
 import torch
 from torch import Tensor
-
-
-def random_masking(
-    x: Tensor,
-    ids_keep: Tensor,
-    random_mask_ratio: float,
-    random_mask_probability: float,
-    **kwargs: Any,
-) -> Tensor:
-    """Perform per-sample random masking by per-sample shuffling.
-
-    Per-sample shuffling is done by argsort random noise.
-    x: [N, L, D], sequence
-    """
-    if torch.rand(1) > random_mask_probability:
-        return ids_keep
-
-    _, P, _ = x.shape
-
-    len_keep = int(P * (1 - random_mask_ratio))
-    ids_keep = ids_keep[torch.randperm(len(ids_keep))[:len_keep]]
-
-    return ids_keep
-
-
-def focal_masking(
-    x: Tensor,
-    ids_keep: Tensor,
-    focal_mask_ratio: float,
-    focal_mask_probability: float,
-    **kwargs: Any,
-) -> Tensor:
-    """Perform focal masking."""
-    if torch.rand(1) > focal_mask_probability:
-        return ids_keep
-
-    _, P, _ = x.shape
-
-    side = int(P**0.5)
-    focal_ratio = 1 - focal_mask_ratio
-
-    # Generate focal mask
-    center = side / 2
-    half_scaled = side // 2 * focal_ratio
-    low, high = round(center - half_scaled), round(center + half_scaled)
-
-    mask = torch.arange(P, device=x.device).reshape((side, side))
-    ids = mask[low:high, low:high].flatten()
-
-    ids_keep = ids_keep[(ids_keep.view(1, -1) == ids.view(-1, 1)).any(dim=0)]
-
-    return ids_keep
 
 
 # TODO: Attribution (Facebook)
@@ -124,3 +70,13 @@ def get_1d_sincos_pos_embed_from_grid(
 
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
     return emb
+
+
+def generate_identity_mask(x: Tensor, image_size: int, patch_size: int) -> Tensor:
+    """Generate identity mask."""
+    B, *_ = x.shape
+
+    num_patches = (image_size // patch_size) ** 2
+    mask = torch.zeros((B, num_patches), device=x.device, dtype=torch.bool)
+
+    return mask

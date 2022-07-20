@@ -3,7 +3,7 @@
 # TODO: Attribution (Facebook)
 """MAE tasks."""
 
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Callable, cast
 
 import torch
 import wandb
@@ -16,11 +16,16 @@ from torchvision.utils import make_grid
 
 from ..models import MaskedAutoencoderViT
 from ..utils import _to_tuple
-from .utils import patchify, unpatchify
+from .utils import focal_masking, patchify, random_masking, unpatchify
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
 Module.__module__ = "torch.nn"
+
+MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
+    "focal_masking": focal_masking,
+    "random_masking": random_masking,
+}
 
 
 def masked_reconstruction_loss(
@@ -46,8 +51,8 @@ class Augmentations(Module):
 
     def __init__(
         self,
-        image_size: Tuple[int, int] = (256, 256),
-        crop_size: Optional[Tuple[int, int]] = None,
+        image_size: tuple[int, int] = (256, 256),
+        crop_size: tuple[int, int] | None = None,
     ) -> None:
         """Initialize augmentations.
 
@@ -64,7 +69,10 @@ class Augmentations(Module):
             "train": Sequential(
                 K.Resize(size=image_size, align_corners=False),
                 K.RandomResizedCrop(
-                    size=crop_size, align_corners=False, resample="BICUBIC"
+                    size=crop_size,
+                    scale=(0.6, 1.0),
+                    align_corners=False,
+                    resample="BICUBIC",
                 ),
                 K.RandomHorizontalFlip(),
             ),
@@ -74,7 +82,7 @@ class Augmentations(Module):
             ),
         }
 
-    def forward(self, x: Tensor, stage: Optional[str]) -> Tensor:
+    def forward(self, x: Tensor, stage: str | None = None) -> Tensor:
         """Applys SimCLR augmentations to the input tensor.
 
         Args:
@@ -121,10 +129,10 @@ class MAETask(LightningModule):
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
-                "random_mask_ratio": 0.7,
-                "random_mask_probability": 0.8,
                 "focal_mask_ratio": 0.3,
                 "focal_mask_probability": 0.3,
+                "random_mask_ratio": 0.7,
+                "random_mask_probability": 0.8,
             },
         )
 
@@ -144,18 +152,18 @@ class MAETask(LightningModule):
 
         # Creates `self.hparams` from kwargs
         self.save_hyperparameters()  # type: ignore[operator]
-        self.hyperparams = cast(Dict[str, Any], self.hparams)
+        self.hyperparams = cast(dict[str, Any], self.hparams)
 
         self.config_task()
 
-    def setup(self, stage: Optional[str] = None) -> None:
+    def setup(self, stage: str | None = None) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
         image_size = _to_tuple(self.image_size)
         crop_size = _to_tuple(self.crop_size)
 
         self.augment = Augmentations(image_size, crop_size)
 
-    def configure_optimizers(self) -> Dict[str, Any]:
+    def configure_optimizers(self) -> dict[str, Any]:
         """Initialize the optimizer and learning rate scheduler.
 
         Returns:
@@ -198,22 +206,28 @@ class MAETask(LightningModule):
         return self.model(*args, **kwargs)
 
     def shared_step(
-        self, stage: Optional[str] = None, *args: Any, **kwargs: Any
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        self, stage: str | None = None, *args: Any, **kwargs: Any
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """TODO: Docstring."""
         batch = args[0]
         x = batch["image"]
-        _, C, *_ = x.shape
+        B, C, *_ = x.shape
 
-        aug = self.augment(x, stage)
-        aug_channel_shuffled = aug[:, torch.randperm(C)]
+        with torch.no_grad():
+            num_patches = (self.crop_size // self.patch_size) ** 2
+            mask = torch.zeros((B, num_patches), device=x.device, dtype=torch.bool)
+            for masking_name in self.mask_fn:
+                mask = MASKING_FUNCTIONS[masking_name](x, mask, **self.mask_kwargs)
 
-        pred, mask = self.forward(aug_channel_shuffled, self.mask_fn, self.mask_kwargs)
+            aug = self.augment(x, stage)
+            aug_shuffled = aug[:, torch.randperm(C)]
+
+        pred = self.forward(aug_shuffled, mask)
         loss = masked_reconstruction_loss(aug[:, :3], pred, mask, self.patch_size)
 
         self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
 
-        return loss, aug, aug_channel_shuffled, pred, mask
+        return loss, aug, aug_shuffled, pred, mask
 
     def training_step(self, *args: Any, **kwargs: Any) -> Tensor:
         """Compute and return the training loss.
@@ -234,12 +248,10 @@ class MAETask(LightningModule):
         Args:
             batch: the output of your DataLoader
         """
-        _, aug, aug_channel_shuffled, pred, mask = self.shared_step(
-            "val", *args, **kwargs
-        )
+        _, aug, aug_shuffled, pred, mask = self.shared_step("val", *args, **kwargs)
 
-        aug_channel_shuffled = aug_channel_shuffled[:, :3]
-        aug_patch = patchify(aug_channel_shuffled, self.patch_size)
+        aug_shuffled = aug_shuffled[:, :3]
+        aug_patch = patchify(aug_shuffled, self.patch_size)
 
         mask_expanded = (~mask.bool()).unsqueeze(-1).expand(aug_patch.shape)
         masked_aug = torch.zeros_like(aug_patch, device=self.device)  # type: ignore
@@ -252,20 +264,17 @@ class MAETask(LightningModule):
 
     def validation_epoch_end(
         self,
-        validation_step_outputs: Union[
-            List[Union[Tensor, Dict[str, Any]]],
-            List[List[Union[Tensor, Dict[str, Any]]]],
-        ],
+        validation_step_outputs: list[Tensor | dict[str, Any]]
+        | list[list[Tensor | dict[str, Any]],],
     ) -> None:
         """Log images."""
-        if isinstance(validation_step_outputs, List):
-            images = validation_step_outputs[0]
-            _, B, *_ = images.shape
+        images = validation_step_outputs[0]  # type: ignore
+        _, B, *_ = images.shape
 
-            grid = make_grid(images[:, :10].flatten(0, 1)[:, :3], nrow=10)
-            images = wandb.Image(grid, caption="Images")
+        grid = make_grid(images[:, :10].flatten(0, 1)[:, :3], nrow=10)
+        images = wandb.Image(grid, caption="Images")
 
-            wandb.log({"Images": images})
+        wandb.log({"Images": images})
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """No-op, does nothing."""

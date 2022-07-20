@@ -1,31 +1,32 @@
 """Embedding classifciation task."""
 
 from os.path import isfile
-from typing import Any, Dict, Optional, Sequence, cast, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple, cast
 
 import torch
+from kornia import augmentation as K
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
 from torch.nn import (
+    Conv2d,
     CrossEntropyLoss,
+    Identity,
     Linear,
     Module,
     Sequential,
-    Identity,
-    Conv2d,
     init,
 )
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchmetrics import Accuracy, FBetaScore, JaccardIndex, MetricCollection
 
+from ..utils import _to_tuple
 from .byol import BYOLTask
 from .mae import MAETask
+from .msae import MSAETask
+from .msn import MSNTask
 from .tile2vec import Tile2VecTask
+from .utils import unpatchify
 from .vicreg import VICRegTask
-
-from ..utils import _to_tuple
-from .utils import patchify, unpatchify
-from kornia import augmentation as K
 
 
 class Augmentations(Module):
@@ -62,7 +63,7 @@ class Augmentations(Module):
         }
 
     def forward(self, x: Tensor, stage: Optional[str]) -> Tensor:
-        """Applys SimCLR augmentations to the input tensor.
+        """Applys augmentations to the input tensor.
 
         Args:
             x: a batch of imagery
@@ -130,6 +131,28 @@ class EmbeddingEvaluator(LightningModule):
                 task = MAETask(**self.hyperparams)
             task.freeze()
             self.encoder = task.model.encoder
+        elif self.hyperparams["task_name"] == "msn":
+            if "checkpoint_path" in self.hyperparams and isfile(
+                self.hyperparams["checkpoint_path"]
+            ):
+                task = MSNTask.load_from_checkpoint(self.hyperparams["checkpoint_path"])
+                print(f"Loaded from checkpoint: {self.hyperparams['checkpoint_path']}")
+            else:
+                task = MSNTask(**self.hyperparams)
+            task.freeze()
+            self.encoder = task.model
+        elif self.hyperparams["task_name"] == "msae":
+            if "checkpoint_path" in self.hyperparams and isfile(
+                self.hyperparams["checkpoint_path"]
+            ):
+                task = MSAETask.load_from_checkpoint(
+                    self.hyperparams["checkpoint_path"]
+                )
+                print(f"Loaded from checkpoint: {self.hyperparams['checkpoint_path']}")
+            else:
+                task = MSAETask(**self.hyperparams)
+            task.freeze()
+            self.encoder = task.model.encoder
         elif self.hyperparams["task_name"] == "identity":
             self.encoder = Identity()  # type: ignore[no-untyped-call]
         else:
@@ -138,9 +161,9 @@ class EmbeddingEvaluator(LightningModule):
             )
 
         image_size = self.hyperparams["image_size"]
-        image_size = _to_tuple(image_size)
-
         crop_size = self.hyperparams.get("crop_size", image_size)
+
+        image_size = _to_tuple(image_size)
         crop_size = _to_tuple(crop_size)
 
         in_channels = self.hyperparams.get("in_channels", 4)
@@ -336,7 +359,7 @@ class EmbeddingEvaluator(LightningModule):
         return cast(Dict[str, Tensor], metrics)
 
     def evaluate_dimensionality(self, embeddings: Tensor) -> Dict[str, Tensor]:
-        """TODO: Docstring."""
+        """Evaluate the dimensionality of the embeddings using PCA."""
         embeddings_normalized = torch.nn.functional.normalize(embeddings, dim=1)
         cov_embeddings = torch.cov(embeddings_normalized.T)
         svdvals_embeddings = torch.linalg.svdvals(cov_embeddings.float())

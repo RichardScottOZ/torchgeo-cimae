@@ -7,8 +7,6 @@ import warnings
 from collections import OrderedDict
 from typing import Any, Optional, Tuple, Union, cast
 
-import numpy as np
-import numpy.typing as npt
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -157,7 +155,8 @@ def reinit_initial_conv_layer(
 
 
 def patchify(imgs: Tensor, patch_size: int) -> Tensor:
-    """
+    """Patches a batch of images.
+
     imgs: (N, 3, H, W)
     x: (N, L, patch_size**2 *3)
     """
@@ -172,17 +171,85 @@ def patchify(imgs: Tensor, patch_size: int) -> Tensor:
     return x
 
 
-def unpatchify(x: Tensor, patch_size: int) -> Tensor:
-    """
+def unpatchify(x: Tensor, patch_size: int, flat: bool = False) -> Tensor:
+    """Unpatchify an image.
+
     x: (N, L, patch_size**2 *3)
     imgs: (N, 3, H, W)
     """
-    B, P, E = x.shape
+    B, P, _ = x.shape
 
-    h = w = int(P**0.5)
-    assert h * w == P
+    if not flat:
+        h = w = int(P**0.5)
+        assert h * w == P
 
-    x = x.reshape(shape=(B, h, w, patch_size, patch_size, -1))
-    x = torch.einsum("nhwpqc->nchpwq", x)  # type: ignore[no-untyped-call]
-    imgs = x.reshape(shape=(x.shape[0], -1, h * patch_size, h * patch_size))
+        x = x.reshape(shape=(B, h, w, patch_size, patch_size, -1))
+        x = torch.einsum("nhwpqc->nchpwq", x)  # type: ignore[no-untyped-call]
+        imgs = x.reshape(shape=(B, -1, h * patch_size, h * patch_size))
+        return imgs
+
+    x = x.reshape(shape=(B, P, patch_size, patch_size, -1))
+    x = torch.einsum("nhpqc->ncphq", x)  # type: ignore[no-untyped-call]
+
+    imgs = x.reshape(shape=(B, -1, patch_size, P * patch_size))
     return imgs
+
+
+def random_masking(
+    x: Tensor,
+    mask: Tensor,
+    random_mask_ratio: float,
+    random_mask_probability: float,
+    **kwargs: Any,
+) -> Tensor:
+    """Perform per-sample random masking by per-sample shuffling.
+
+    Per-sample shuffling is done by argsort random noise.
+    x: [N, L, D], sequence
+    """
+    if torch.rand(1) > random_mask_probability:
+        return mask
+
+    B, P = mask.shape
+
+    num_removed = mask[0].sum()
+    num_kept = P - num_removed
+    len_remove = max(int(P * random_mask_ratio) - num_removed, 0)
+
+    ids_kept = (~mask).flatten().argwhere().view(B, num_kept)
+    noise = torch.rand(B, num_kept, device=x.device)
+    ids_shuffle = torch.argsort(noise, dim=1)
+    ids_remove = ids_kept.gather(dim=1, index=ids_shuffle[:, :len_remove]).flatten()
+
+    mask.flatten()[ids_remove] = True
+
+    return mask
+
+
+def focal_masking(
+    x: Tensor,
+    mask: Tensor,
+    focal_mask_ratio: float,
+    focal_mask_probability: float,
+    **kwargs: Any,
+) -> Tensor:
+    """Perform focal masking."""
+    if torch.rand(1) > focal_mask_probability:
+        return mask
+
+    B, P = mask.shape
+    focal_ratio = 1 - focal_mask_ratio
+
+    side = int(P**0.5)
+
+    # Generate focal mask
+    center = side / 2
+    half_scaled = side // 2 * focal_ratio
+    low, high = round(center - half_scaled), round(center + half_scaled)
+
+    focal_mask = torch.ones((B, side, side), device=mask.device, dtype=torch.bool)
+    focal_mask[:, low:high, low:high] = False
+
+    mask |= focal_mask.view(B, P)
+
+    return mask
