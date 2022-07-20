@@ -3,69 +3,73 @@
 
 """VICReg tasks."""
 
-import random
-from typing import Any, Callable, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import torch
 import torch.nn.functional as F
 from kornia import augmentation as K
 from kornia import filters
-from kornia.geometry import transform as KorniaTransform
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
-from torch.autograd import Variable
+from torch.nn import init
 from torch.nn.modules import BatchNorm1d, Conv2d, Linear, Module, ReLU, Sequential
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-from torchgeo.models import resnet18, resnet50
+from torchgeo.models import MaskedViT, resnet18, resnet50
 
 from ..utils import _to_tuple
+from .utils import unpatchify
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
 Module.__module__ = "torch.nn"
 
-# TODO: This isn't _really_ applying the augmentations from SimCLR as we have
-# multispectral imagery and thus can't naively apply color jittering or grayscale
-# conversions. We should think more about what makes sense here.
-class Augmentations(Module):
-    """A module for applying SimCLR augmentations.
 
-    SimCLR was one of the first papers to show the effectiveness of random data
-    augmentation in self-supervised-learning setups. See
-    https://arxiv.org/pdf/2002.05709.pdf for more details.
-    """
+class Augmentations(Module):
+    """A module for applying augmentations."""
 
     def __init__(
         self,
         image_size: Tuple[int, int] = (256, 256),
-        crop_factor: Tuple[float, float] = (0.9, 0.9),
+        crop_size: Optional[Tuple[int, int]] = None,
     ) -> None:
-        """Initialize a module for applying SimCLR augmentations.
+        """Initialize augmentations.
 
         Args:
             image_size: Tuple of integers defining the image size
+            crop_size: Tuple of integers defining the crop size
         """
         super().__init__()
 
-        self.size = image_size
-        # Multiply two tuples
-        crop_size = tuple(
-            ((int)(image * crop) for (image, crop) in zip(image_size, crop_factor))
-        )
+        if crop_size is None:
+            crop_size = image_size
 
-        self.augmentation = Sequential(
-            KorniaTransform.Resize(size=image_size, align_corners=False),
-            K.RandomResizedCrop(
-                size=crop_size, align_corners=False, resample="BICUBIC"
+        self.augmentation = {
+            "train": Sequential(
+                K.Resize(size=image_size, align_corners=False),
+                K.RandomResizedCrop(
+                    size=crop_size,
+                    scale=(0.6, 1.0),
+                    align_corners=False,
+                    resample="BICUBIC",
+                ),
+                K.RandomHorizontalFlip(),
+                K.ImageSequential(
+                    filters.GaussianBlur2d((3, 3), (1.5, 1.5)),
+                    random_apply_weights=[0.1],
+                ),
             ),
-            K.RandomHorizontalFlip(),
-            K.ImageSequential(
-                filters.GaussianBlur2d((3, 3), (1.5, 1.5)), random_apply_weights=[0.1]
+            "val": Sequential(
+                K.Resize(size=image_size, align_corners=False),
+                K.CenterCrop(size=crop_size, align_corners=False, resample="BICUBIC"),
+                K.ImageSequential(
+                    filters.GaussianBlur2d((3, 3), (1.5, 1.5)),
+                    random_apply_weights=[0.1],
+                ),
             ),
-        )
+        }
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, stage: Optional[str]) -> Tensor:
         """Applys SimCLR augmentations to the input tensor.
 
         Args:
@@ -74,7 +78,10 @@ class Augmentations(Module):
         Returns:
             an augmented batch of imagery
         """
-        return cast(Tensor, self.augmentation(x))
+        if stage is None:
+            return cast(Tensor, self.augmentation["train"](x))
+
+        return cast(Tensor, self.augmentation[stage](x))
 
 
 def vic_loss(
@@ -128,21 +135,41 @@ def cov_term(x: Tensor, y: Tensor) -> Tensor:
 class VICReg(Module):
     """VICReg implementation."""
 
-    def __init__(self, model: Module, projector: Module) -> None:
+    def __init__(
+        self,
+        model: Module,
+        projector: Module,
+        patch_wise: bool = True,
+        patch_size: int = 16,
+    ) -> None:
         """Setup the VICReg model.
+
         Args:
             model: The encoder model
             projector: The projector model
         """
-
         super().__init__()
 
         self.encoder = model
         self.projector = projector
+        self.patch_wise = patch_wise
+        self.patch_size = patch_size
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, *args: Any, **kwargs: Any) -> Tensor:
         """Forward pass of the encoder model through the projector model."""
-        return cast(Tensor, self.projector(self.encoder(x).squeeze()))
+        B, *_ = x.shape
+
+        embeddings = self.encoder(x, *args, **kwargs)
+
+        if not self.patch_wise:
+            embeddings = embeddings.view(B, -1)
+            embeddings = self.projector(embeddings)
+        else:
+            embeddings = unpatchify(embeddings, self.patch_size, flat=True)
+            embeddings = self.projector(embeddings)
+            embeddings = embeddings.mean((2, 3))
+
+        return cast(Tensor, embeddings)
 
 
 class Projector(Module):
@@ -169,6 +196,15 @@ class Projector(Module):
 
         self.projector = Sequential(*layers)
 
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m: Module) -> None:
+        """Initialize the weights."""
+        if isinstance(m, Linear):
+            torch.nn.init.xavier_uniform_(m.weight)
+            if isinstance(m, Linear) and m.bias is not None:
+                init.constant_(m.bias, 0)
+
     def forward(self, x: Tensor) -> Tensor:
         """TODO: Docstring."""
         return cast(Tensor, self.projector(x))
@@ -185,6 +221,14 @@ class VICRegTask(LightningModule):
         bands = self.hyperparams.get("bands", "all")
         encoder = None
 
+        patch_wise = self.hyperparams.get("patch_wise", False)
+        patch_size = self.hyperparams.get("patch_size", 16)
+        embed_dim = self.hyperparams.get("embed_dim", 512)
+        projection_dim = self.hyperparams.get("projection_dim", 2048)
+
+        self.image_size = self.hyperparams.get("image_size", (256, 256))
+        self.crop_size = self.hyperparams.get("crop_size", (224, 224))
+
         if self.hyperparams["encoder_name"] == "resnet18":
             encoder = resnet18(
                 sensor=sensor,
@@ -192,6 +236,7 @@ class VICRegTask(LightningModule):
                 pretrained=pretrained,
                 imagenet_pretrained=imagenet_pretrained,
             )
+            encoder = Sequential(*(list(encoder.children())[:-1]))
         elif self.hyperparams["encoder_name"] == "resnet50":
             encoder = resnet50(
                 sensor=sensor,
@@ -199,20 +244,43 @@ class VICRegTask(LightningModule):
                 pretrained=pretrained,
                 imagenet_pretrained=imagenet_pretrained,
             )
+            encoder = Sequential(*(list(encoder.children())[:-1]))
+        elif self.hyperparams["encoder_name"] == "vit":
+            encoder = MaskedViT(
+                sensor=sensor,
+                bands=bands,
+                image_size=self.crop_size,
+                patch_size=patch_size,
+                embed_dim=embed_dim,
+                depth=self.hyperparams.get("depth", 24),
+                num_heads=self.hyperparams.get("num_heads", 16),
+                dropout_rate=self.hyperparams.get("dropout_rate", 0.0),
+                dropout_attn=self.hyperparams.get("dropout_attn", 0.0),
+            )
         else:
             raise ValueError(
                 f"Encoder type '{self.hyperparams['encoder_name']}' is not valid."
             )
 
-        embedding_dim = encoder.fc.weight.shape[1]
-        projector = Projector(
-            num_layers=self.hyperparams.get("projector_num_layers", 3),
-            embedding_dim=embedding_dim,
-            projection_dim=self.hyperparams.get("projection_dim", 2048),
-        )
-        encoder = Sequential(*(list(encoder.children())[:-1]))
+        projector: Module
+        if not patch_wise:
+            embedding_dim = encoder.fc.weight.shape[1]
+            projector = Projector(
+                num_layers=self.hyperparams.get("projector_num_layers", 3),
+                embedding_dim=embedding_dim,
+                projection_dim=projection_dim,
+            )
+        else:
+            projector = Conv2d(
+                embed_dim // patch_size**2,
+                projection_dim,
+                kernel_size=patch_size,
+                stride=patch_size,
+            )
+            w = projector.weight.data
+            init.xavier_uniform_(w.view([w.shape[0], -1]))
 
-        self.model = VICReg(encoder, projector)
+        self.model = VICReg(encoder, projector, patch_wise, patch_size)
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize a LightningModule for pre-training a model with BYOL.
@@ -236,21 +304,12 @@ class VICRegTask(LightningModule):
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
-        image_size = self.hyperparams.get("image_size", (256, 256))
-        image_size = _to_tuple(image_size)
+        image_size = _to_tuple(self.image_size)
+        crop_size = _to_tuple(self.crop_size)
 
-        self.augment = self.hyperparams.get("augment_fn", Augmentations(image_size))
-
-    def forward(self, *args: Any, **kwargs: Any) -> Any:
-        """Forward pass of the model.
-
-        Args:
-            x: tensor of data to run through the model
-
-        Returns:
-            output from the model
-        """
-        return self.model(*args, **kwargs)
+        self.augment = self.hyperparams.get(
+            "augment_fn", Augmentations(image_size, crop_size)
+        )
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Initialize the optimizer and learning rate scheduler.
@@ -259,6 +318,9 @@ class VICRegTask(LightningModule):
             a "lr dict" according to the pytorch lightning documentation --
             https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#configure-optimizers
         """
+        if self.trainer is None:
+            return {}
+
         lr = self.hyperparams.get("lr", 0.0)
         momentum = self.hyperparams.get("momentum", 0.9)
         eta = self.hyperparams.get("eta", 0.001)
@@ -291,6 +353,17 @@ class VICRegTask(LightningModule):
             },
         }
 
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        """Forward pass of the model.
+
+        Args:
+            x: tensor of data to run through the model
+
+        Returns:
+            output from the model
+        """
+        return self.model(*args, **kwargs)
+
     def shared_step(
         self, stage: Optional[str] = None, *args: Any, **kwargs: Any
     ) -> Tensor:
@@ -299,7 +372,7 @@ class VICRegTask(LightningModule):
         x = batch["image"]
 
         with torch.no_grad():
-            aug1, aug2 = self.augment(x), self.augment(x)
+            aug1, aug2 = self.augment(x, stage), self.augment(x, stage)
 
         pred1, pred2 = self.forward(aug1), self.forward(aug2)
 
