@@ -29,9 +29,14 @@ MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
 }
 
 
-def embedding_loss(embedding1: Tensor, embedding2: Tensor) -> Tensor:
+def embedding_loss(
+    embedding1: Tensor, embedding2: Tensor, patch_wise: bool = True
+) -> Tensor:
     """Compute embedding loss."""
-    return F.mse_loss(embedding1.mean(dim=1), embedding2.mean(dim=1))
+    if not patch_wise:
+        return F.mse_loss(embedding1.mean(dim=(-2, -1)), embedding2.mean(dim=(-2, -1)))
+
+    return F.mse_loss(embedding1, embedding2)
 
 
 def masked_reconstruction_loss(
@@ -57,8 +62,9 @@ class Augmentations(Module):
 
     def __init__(
         self,
-        image_size: tuple[int, int] = (256, 256),
-        crop_size: tuple[int, int] | None = None,
+        image_size: int | tuple[int, int] = (256, 256),
+        crop_size: int | tuple[int, int] | None = None,
+        patch_size: int = 16,
         scale: float | tuple[float, float] = (0.6, 1.0),
     ) -> None:
         """Initialize augmentations.
@@ -66,13 +72,17 @@ class Augmentations(Module):
         Args:
             image_size: Tuple of integers defining the image size
             crop_size: Tuple of integers defining the crop size
+            patch_size: Integer defining the patch size
             scale: Float or tuple of floats defining the scale range
         """
         super().__init__()
 
-        if crop_size is None:
-            crop_size = image_size
+        crop_size = crop_size or image_size
+        rotations = [0.0, 90.0, 180.0, 270.0]
+        self.patch_size = patch_size
 
+        self.image_size = _to_tuple(image_size)
+        self.crop_size = _to_tuple(crop_size)
         scale = _to_tuple(scale)
 
         self.augmentation = {
@@ -81,7 +91,30 @@ class Augmentations(Module):
                 K.RandomResizedCrop(
                     size=crop_size, scale=scale, align_corners=False, resample="BICUBIC"
                 ),
+            ),
+            "transform": K.AugmentationSequential(
                 K.RandomHorizontalFlip(),
+                K.ImageSequential(
+                    *[
+                        K.RandomRotation([rotation, rotation], p=1.0)
+                        for rotation in rotations
+                    ],
+                    random_apply=1,
+                ),
+                data_keys=["input", "mask"],
+                same_on_batch=True,
+            ),
+            "transform_prime": K.AugmentationSequential(
+                K.RandomHorizontalFlip(),
+                K.ImageSequential(
+                    *[
+                        K.RandomRotation([rotation, rotation], p=1.0)
+                        for rotation in rotations
+                    ],
+                    random_apply=1,
+                ),
+                data_keys=["input", "mask"],
+                same_on_batch=True,
             ),
             "val": Sequential(
                 K.Resize(size=image_size, align_corners=False),
@@ -89,7 +122,9 @@ class Augmentations(Module):
             ),
         }
 
-    def forward(self, x: Tensor, stage: str | None) -> Tensor:
+    def forward(
+        self, x: Tensor, stage: str | None = None, mask: Tensor | None = None
+    ) -> Tensor | tuple[Tensor, Tensor]:
         """Applys SimCLR augmentations to the input tensor.
 
         Args:
@@ -101,7 +136,54 @@ class Augmentations(Module):
         if stage is None:
             return cast(Tensor, self.augmentation["train"](x))
 
+        if "transform" in stage:
+            if mask is None:
+                raise ValueError("Mask is required for transform")
+
+            B, P = mask.shape
+            side = int(P**0.5)
+            mask = mask.view(B, 1, side, side).float()
+            x, mask = self.augmentation[stage](x, mask)
+            mask = mask.view(B, -1).round().bool()  # type: ignore
+
+            return x, mask
+
         return cast(Tensor, self.augmentation[stage](x))
+
+    def inverse(
+        self, pred: Tensor, mask: Tensor, latent: Tensor, mask_org: Tensor, stage: str
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Applys augmentations to the input tensor.
+
+        Args:
+            x: a batch of imagery
+
+        Returns:
+            an augmented batch of imagery
+        """
+        if "transform" not in stage:
+            raise ValueError("Only transform stages are supported")
+
+        B, P = mask.shape
+        _, _, H = latent.shape
+        side = int(P**0.5)
+
+        pred = unpatchify(pred, self.patch_size)
+        latent_full = torch.zeros((B, P, H), device=pred.device)
+        latent_full[~mask] = latent.flatten(0, 1)
+        mask = mask.view(B, 1, side, side).float()
+        latent_full = unpatchify(latent_full, self.patch_size)
+
+        pred, latent_full, mask = self.augmentation[stage].inverse(
+            pred, latent_full, mask, data_keys=["input", "input", "mask"]
+        )
+
+        pred = patchify(pred, self.patch_size)
+        mask = mask.view(B, -1).round().bool()
+        latent_full = patchify(latent_full, self.patch_size)
+        latent = latent_full[~mask_org].view_as(latent)
+
+        return pred, mask, latent
 
 
 class MSAETask(LightningModule):
@@ -220,30 +302,37 @@ class MSAETask(LightningModule):
         """TODO: Docstring."""
         batch = args[0]
         x: Tensor = batch["image"]
-        B, C, *_ = x.shape
+        _, C, *_ = x.shape
 
         with torch.no_grad():
-            num_patches = (self.crop_size // self.patch_size) ** 2
-            mask = torch.zeros((B, num_patches), device=x.device, dtype=torch.bool)
-            for masking_name in self.mask_fn:
-                mask = MASKING_FUNCTIONS[masking_name](x, mask, **self.mask_kwargs)
+            aug = self.augment(x, stage)
+            mask = self.generate_mask(x)
 
-            aug1, aug2 = self.augment(x, stage), self.augment(x, stage)
             aug1_shuffled, aug2_shuffled = (
-                aug1[:, torch.randperm(C)],
-                aug2[:, torch.randperm(C)],
+                aug[:, torch.randperm(C)],
+                aug[:, torch.randperm(C)],
             )
 
-        pred1, latent1 = self.forward(aug1_shuffled, mask)
-        pred2, latent2 = self.forward(aug2_shuffled, mask)
+            aug1_shuffled, mask1 = self.augment(aug1_shuffled, "transform", mask)
+            aug2_shuffled, mask2 = self.augment(aug2_shuffled, "transform_prime", mask)
+
+        pred1, latent1 = self.forward(aug1_shuffled, mask1)
+        pred2, latent2 = self.forward(aug2_shuffled, mask2)
+
+        pred1_res, mask1_res, latent1_res = self.augment.inverse(
+            pred1, mask1, latent1, mask, "transform"
+        )
+        pred2_res, mask2_res, latent2_res = self.augment.inverse(
+            pred2, mask2, latent2, mask, "transform_prime"
+        )
 
         loss_rec1 = masked_reconstruction_loss(
-            aug1[:, :3], pred1, mask, self.patch_size
+            aug[:, :3], pred1_res, mask1_res, self.patch_size
         )
         loss_rec2 = masked_reconstruction_loss(
-            aug2[:, :3], pred2, mask, self.patch_size
+            aug[:, :3], pred2_res, mask2_res, self.patch_size
         )
-        loss_embedding = embedding_loss(latent1, latent2)
+        loss_embedding = embedding_loss(latent1_res, latent2_res)
         loss = loss_embedding + (loss_rec1 + loss_rec2) / 2
 
         self.log_dict(
@@ -262,15 +351,26 @@ class MSAETask(LightningModule):
             "loss_embedding": loss_embedding,
             "loss_rec1": loss_rec1,
             "loss_rec2": loss_rec2,
-            "aug1": aug1,
+            "aug1": aug,
             "aug1_shuffled": aug1_shuffled,
             "pred1": pred1,
-            "mask1": mask,
-            "aug2": aug2,
+            "mask1": mask1,
+            "aug2": aug,
             "aug2_shuffled": aug2_shuffled,
             "pred2": pred2,
-            "mask2": mask,
+            "mask2": mask2,
         }
+
+    def generate_mask(self, x: Tensor) -> Tensor:
+        """Generate masks based on mask_fn and mask_kwargs."""
+        B, *_ = x.shape
+        num_patches = (self.crop_size // self.patch_size) ** 2
+
+        mask = torch.zeros((B, num_patches), device=x.device, dtype=torch.bool)
+        for masking_name in self.mask_fn:
+            mask = MASKING_FUNCTIONS[masking_name](x, mask, **self.mask_kwargs)
+
+        return mask
 
     def training_step(self, *args: Any, **kwargs: Any) -> Tensor:
         """Compute and return the training loss.
