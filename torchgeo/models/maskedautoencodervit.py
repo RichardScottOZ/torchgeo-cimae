@@ -135,16 +135,16 @@ class MaskedEncoderViT(Module):
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
         """Forward pass of the model."""
-        out = self.embed_module(x)
+        x = self.embed_module(x)
 
         if mask is not None:
-            B, _, H = out.shape
-            out = out[~mask].view(B, -1, H)
+            B, _, H = x.shape
+            x = x[~mask].view(B, -1, H)
 
-        out = self.encoder(out)
-        out = self.norm(out)
+        x = self.encoder(x)
+        x = self.norm(x)
 
-        return cast(Tensor, out)
+        return x
 
 
 class DecoderEmbedding(Module):
@@ -192,9 +192,10 @@ class DecoderEmbedding(Module):
             init.constant_(m.bias, 0)
             init.constant_(m.weight, 1.0)
 
-    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """TODO: Docstring."""
         x = self.embedder(x)
+        latent = x.clone()
         B, _, _ = x.shape
 
         if mask is not None:
@@ -204,7 +205,7 @@ class DecoderEmbedding(Module):
 
         x += self.positional_embeddings
 
-        return x
+        return x, latent
 
 
 class MaskedDecoderViT(Module):
@@ -254,15 +255,15 @@ class MaskedDecoderViT(Module):
             init.constant_(m.bias, 0)
             init.constant_(m.weight, 1.0)
 
-    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """Forward pass of the model."""
-        out = self.embed_module(x, mask)
-        out = self.decoder(out)
-        out = self.norm(out)
+        x, latent = self.embed_module(x, mask)
+        x = self.decoder(x)
+        x = self.norm(x)
 
-        out = self.predictor(out)
+        x = self.predictor(x)
 
-        return cast(Tensor, out)
+        return x, latent
 
 
 class MaskedAutoencoderViT(Module):
@@ -322,12 +323,12 @@ class MaskedAutoencoderViT(Module):
     ) -> Tensor | tuple[Tensor, Tensor]:
         """Forward pass of the model."""
         latent = self.encoder(x, mask)
-        pred: Tensor = self.decoder(latent, mask)
+        pred, latent = self.decoder(latent, mask)
 
         if self.return_latent:
             return pred, latent
 
-        return pred
+        return cast(Tensor, pred)
 
 
 class MaskedViT(Module):

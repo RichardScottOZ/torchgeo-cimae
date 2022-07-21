@@ -171,8 +171,8 @@ class Augmentations(Module):
         pred = unpatchify(pred, self.patch_size)
         latent_full = torch.zeros((B, P, H), device=pred.device)
         latent_full[~mask] = latent.flatten(0, 1)
-        mask = mask.view(B, 1, side, side).float()
         latent_full = unpatchify(latent_full, self.patch_size)
+        mask = mask.view(B, 1, side, side).float()
 
         pred, latent_full, mask = self.augmentation[stage].inverse(
             pred, latent_full, mask, data_keys=["input", "input", "mask"]
@@ -305,20 +305,29 @@ class MSAETask(LightningModule):
         _, C, *_ = x.shape
 
         with torch.no_grad():
+            # Augment img and generate mask
             aug = self.augment(x, stage)
             mask = self.generate_mask(x)
 
+            # Shuffle img channels
+            channels1_shuffle, channels2_shuffle = (
+                torch.randperm(C),
+                torch.randperm(C),
+            )
             aug1_shuffled, aug2_shuffled = (
-                aug[:, torch.randperm(C)],
-                aug[:, torch.randperm(C)],
+                aug[:, channels1_shuffle],
+                aug[:, channels2_shuffle],
             )
 
+            # Transform img and mask
             aug1_shuffled, mask1 = self.augment(aug1_shuffled, "transform", mask)
             aug2_shuffled, mask2 = self.augment(aug2_shuffled, "transform_prime", mask)
 
+        # Forward pass
         pred1, latent1 = self.forward(aug1_shuffled, mask1)
         pred2, latent2 = self.forward(aug2_shuffled, mask2)
 
+        # Restore transform augmentation
         pred1_res, mask1_res, latent1_res = self.augment.inverse(
             pred1, mask1, latent1, mask, "transform"
         )
@@ -326,6 +335,7 @@ class MSAETask(LightningModule):
             pred2, mask2, latent2, mask, "transform_prime"
         )
 
+        # Calculate losses
         loss_rec1 = masked_reconstruction_loss(
             aug[:, :3], pred1_res, mask1_res, self.patch_size
         )
@@ -334,7 +344,7 @@ class MSAETask(LightningModule):
         )
         loss_embedding = embedding_loss(latent1_res, latent2_res)
         loss = loss_embedding + (loss_rec1 + loss_rec2) / 2
-
+        
         self.log_dict(
             {
                 f"{stage}_loss": loss,
