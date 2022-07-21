@@ -232,16 +232,15 @@ class MaskedDecoderViT(Module):
 
         self.embed_module = DecoderEmbedding(num_patches, in_channels, embed_dim)
 
-        hidden_dim = self.embed_module.embed_dim
         self.decoder = TransformerEncoder(
-            hidden_dim, depth, num_heads, dropout_rate, dropout_attn
+            embed_dim, depth, num_heads, dropout_rate, dropout_attn
         )
 
         self.predictor = Linear(
-            hidden_dim, patch_size**2 * out_channels, bias=True
+            embed_dim, patch_size**2 * out_channels, bias=True
         )  # decoder to patch
 
-        self.norm = LayerNorm(hidden_dim)
+        self.norm = LayerNorm(embed_dim)
 
         self.apply(self._init_weights)
 
