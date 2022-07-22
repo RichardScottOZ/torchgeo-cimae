@@ -3,19 +3,19 @@
 
 """VICReg tasks."""
 
-from typing import Any, cast, Callable
+from typing import Any, Callable, cast
 
 import torch
 import torch.nn.functional as F
 from kornia import augmentation as K
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
-from torch.nn import Conv2d, Module, Sequential, init
+from torch.nn import Linear, Module, Sequential, init
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ..models import MaskedViT
 from ..utils import _to_tuple
-from .utils import unpatchify, focal_masking, random_masking
+from .utils import focal_masking, random_masking
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
@@ -137,27 +137,24 @@ def off_diagonal(x: Tensor) -> Tensor:
 class VICReg(Module):
     """VICReg implementation."""
 
-    def __init__(self, model: Module, projector: Module, patch_size: int = 16) -> None:
+    def __init__(self, model: Module, projector: Module) -> None:
         """Setup the VICReg model.
 
         Args:
             model: The encoder model
             projector: The projector model
-            patch_size: The patch size
         """
         super().__init__()
 
         self.encoder = model
         self.projector = projector
-        self.patch_size = patch_size
 
     def forward(self, x: Tensor, *args: Any, **kwargs: Any) -> Tensor:
         """Forward pass of the encoder model through the projector model."""
         embeddings = self.encoder(x, *args, **kwargs)
 
-        embeddings = unpatchify(embeddings, self.patch_size, flat=True)
         projections = self.projector(embeddings)
-        projections = projections.mean((2, 3))
+        projections = projections.mean(1)
 
         return cast(Tensor, projections)
 
@@ -199,16 +196,11 @@ class MSNTask(LightningModule):
             },
         )
 
-        projector = Conv2d(
-            embed_dim // self.patch_size**2,
-            projection_dim,
-            kernel_size=self.patch_size,
-            stride=self.patch_size,
-        )
-        w = projector.weight.data
-        init.xavier_uniform_(w.view([w.shape[0], -1]))
+        projector = Linear(embed_dim, projection_dim)
+        projector.weight.data.normal_(mean=0.0, std=0.01)
+        projector.bias.data.zero_()
 
-        self.model = VICReg(encoder, projector, self.patch_size)
+        self.model = VICReg(encoder, projector)
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize a LightningModule for pre-training a model with BYOL.

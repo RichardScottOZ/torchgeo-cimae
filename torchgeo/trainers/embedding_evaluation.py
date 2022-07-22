@@ -25,7 +25,6 @@ from .mae import MAETask
 from .msae import MSAETask
 from .msn import MSNTask
 from .tile2vec import Tile2VecTask
-from .utils import unpatchify
 from .vicreg import VICRegTask
 
 

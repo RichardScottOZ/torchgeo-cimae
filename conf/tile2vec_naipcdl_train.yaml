@@ -1,6 +1,6 @@
 trainer:
-  gpus: 1
-  max_epochs: 50
+  gpus: [0]
+  max_epochs: 500
   precision: 16
   benchmark: True
 experiment:
@@ -11,27 +11,33 @@ experiment:
     test: False
   module:
     model: "tile2vec"
-    encoder_name: "resnet18"
+    encoder_name: "vit"
     sensor: "naip"
-    patch_size: 50
     imagenet_pretrained: False
     pretrained: False
+    image_size: 256
+    crop_size: 224
+    patch_wise: True
+    patch_size: 16
+    embed_dim: 1024
+    projection_dim: 2048
+    depth: 6
+    num_heads: 1
     lr: 0.001
     betas:
       - 0.5
       - 0.999
     margin: 10
     l2: 0.01
-    project: False
     learning_rate_schedule_patience: 6
   datamodule:
-    naip_root_dir: "/scratch/NAIP"
+    naip_root_dir: "/data/users/mike/data/NAIP"
     batch_size: 50
-    train_length: 100000
-    val_length: 15000
-    num_workers: 4
-    patch_size: 50
-    neighborhood: 100
+    train_length: 10000
+    val_length: 1500
+    num_workers: 8
+    patch_size: 256
+    neighborhood: 512
     dataset_split: "roi_split_grid"
     number_of_cells: 12
     area_of_interest:

@@ -80,9 +80,6 @@ class Augmentations(Module):
         crop_size = crop_size or image_size
         rotations = [0.0, 90.0, 180.0, 270.0]
         self.patch_size = patch_size
-
-        self.image_size = _to_tuple(image_size)
-        self.crop_size = _to_tuple(crop_size)
         scale = _to_tuple(scale)
 
         self.augmentation = {
@@ -344,7 +341,7 @@ class MSAETask(LightningModule):
         )
         loss_embedding = embedding_loss(latent1_res, latent2_res)
         loss = loss_embedding + (loss_rec1 + loss_rec2) / 2
-        
+
         self.log_dict(
             {
                 f"{stage}_loss": loss,

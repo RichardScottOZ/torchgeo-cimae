@@ -19,7 +19,7 @@ experiment:
     crop_size: 224
     patch_size: 16
     embed_dim: 1024
-    depth: 4
+    depth: 6
     num_heads: 1
     projector_num_layers: 3
     projection_dim: 2048
