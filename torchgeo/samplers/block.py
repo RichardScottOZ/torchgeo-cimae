@@ -33,6 +33,7 @@ class BlockGeoSampler(Sampler[BoundingBox], abc.ABC):
     def __init__(
         self,
         dataset: GeoDataset,
+        block_size: float | tuple[float, float],
         roi: BoundingBox | Sequence[BoundingBox] | None = None,
     ) -> None:
         """Initialize a new Sampler instance.
@@ -49,60 +50,62 @@ class BlockGeoSampler(Sampler[BoundingBox], abc.ABC):
             if not isinstance(roi, Sequence):
                 roi = [roi]
 
+            t_block_size = _to_tuple(block_size)
+
             self.index = Index(interleaved=False, properties=Property(dimension=3))
             for region in roi:
                 hits = dataset.index.intersection(tuple(region), objects=True)
                 for hit in hits:
                     bounds = BoundingBox(*hit.bounds)
-                    region_bounded = bounds & region
 
-                    window_start: Optional[rasterio.windows.Window] = None
-                    window_end: Optional[rasterio.windows.Window] = None
-                    with rasterio.open(hit.object) as src:
-                        [row_start], [col_start] = rasterio.transform.rowcol(
-                            src.transform,
-                            [region_bounded.minx],
-                            [region_bounded.maxy],
-                            op=ceil,
-                        )
+                    minx, _, _, maxy, *_ = bounds
+                    minx_bounded, maxx_bounded, miny_bounded, maxy_bounded, *_ = (
+                        bounds & region
+                    )
 
-                        [row_end], [col_end] = rasterio.transform.rowcol(
-                            src.transform,
-                            [region_bounded.maxx],
-                            [region_bounded.miny],
-                            op=floor,
-                        )
+                    minx_bounded += t_block_size[0] * dataset.res + 3.6
 
-                        window_current: Optional[rasterio.windows.Window] = None
-                        for _, window in src.block_windows():
-                            if (
-                                window.col_off < col_start
-                                or window.row_off < row_start
-                                or window.width < src.block_shapes[1][1]
-                            ):
-                                continue
-                            if (
-                                window.height < src.block_shapes[1][0]
-                                or window.row_off > row_end
-                            ):
-                                break
+                    num_blocks_minx = ceil(
+                        (minx_bounded - minx) / dataset.res / t_block_size[0]
+                    )
+                    num_blocks_maxx = floor(
+                        (maxx_bounded - minx) / dataset.res / t_block_size[0]
+                    )
+                    num_blocks_maxy = ceil(
+                        (maxy - maxy_bounded) / dataset.res / t_block_size[1]
+                    )
+                    num_blocks_miny = floor(
+                        (maxy - miny_bounded) / dataset.res / t_block_size[1]
+                    )
 
-                            if window_start is None:
-                                window_start = window
-
-                            if window.col_off <= col_end:
-                                window_end = window_current
-
-                            window_current = window
-
-                    if window_start is None or window_end is None:
+                    if (
+                        num_blocks_maxx == 0
+                        or num_blocks_maxx <= num_blocks_minx
+                        or num_blocks_miny == 0
+                        or num_blocks_miny < num_blocks_maxy
+                    ):
                         continue
 
-                    minx, _, _, maxy = src.window_bounds(window_start)
-                    _, miny, maxx, _ = src.window_bounds(window_end)
+                    minx_block = minx + num_blocks_minx * (
+                        t_block_size[0] * dataset.res
+                    )
+                    maxx_block = minx + num_blocks_maxx * (
+                        t_block_size[0] * dataset.res
+                    )
+                    maxy_block = maxy - num_blocks_maxy * (
+                        t_block_size[1] * dataset.res
+                    )
+                    miny_block = maxy - num_blocks_miny * (
+                        t_block_size[1] * dataset.res
+                    )
 
                     region_block = BoundingBox(
-                        minx, maxx, miny, maxy, bounds.mint, bounds.maxt
+                        minx_block,
+                        maxx_block,
+                        miny_block,
+                        maxy_block,
+                        bounds.mint,
+                        bounds.maxt,
                     )
 
                     self.index.insert(hit.id, tuple(region_block), hit.object)
@@ -131,6 +134,7 @@ class BlockBatchGeoSampler(Sampler[list[BoundingBox]], abc.ABC):
     def __init__(
         self,
         dataset: GeoDataset,
+        block_size: float | tuple[float, float],
         roi: BoundingBox | Sequence[BoundingBox] | None = None,
     ) -> None:
         """Initialize a new Sampler instance.
@@ -147,60 +151,62 @@ class BlockBatchGeoSampler(Sampler[list[BoundingBox]], abc.ABC):
             if not isinstance(roi, Sequence):
                 roi = [roi]
 
+            t_block_size = _to_tuple(block_size)
+
             self.index = Index(interleaved=False, properties=Property(dimension=3))
             for region in roi:
                 hits = dataset.index.intersection(tuple(region), objects=True)
                 for hit in hits:
                     bounds = BoundingBox(*hit.bounds)
-                    region_bounded = bounds & region
 
-                    window_start: Optional[rasterio.windows.Window] = None
-                    window_end: Optional[rasterio.windows.Window] = None
-                    with rasterio.open(hit.object) as src:
-                        [row_start], [col_start] = rasterio.transform.rowcol(
-                            src.transform,
-                            [region_bounded.minx],
-                            [region_bounded.maxy],
-                            op=ceil,
-                        )
+                    minx, _, _, maxy, *_ = bounds
+                    minx_bounded, maxx_bounded, miny_bounded, maxy_bounded, *_ = (
+                        bounds & region
+                    )
 
-                        [row_end], [col_end] = rasterio.transform.rowcol(
-                            src.transform,
-                            [region_bounded.maxx],
-                            [region_bounded.miny],
-                            op=floor,
-                        )
+                    minx_bounded += t_block_size[0] * dataset.res + 3.6
 
-                        window_current: Optional[rasterio.windows.Window] = None
-                        for _, window in src.block_windows():
-                            if (
-                                window.col_off < col_start
-                                or window.row_off < row_start
-                                or window.width < src.block_shapes[1][1]
-                            ):
-                                continue
-                            if (
-                                window.height < src.block_shapes[1][0]
-                                or window.row_off > row_end
-                            ):
-                                break
+                    num_blocks_minx = ceil(
+                        (minx_bounded - minx) / dataset.res / t_block_size[0]
+                    )
+                    num_blocks_maxx = floor(
+                        (maxx_bounded - minx) / dataset.res / t_block_size[0]
+                    )
+                    num_blocks_maxy = ceil(
+                        (maxy - maxy_bounded) / dataset.res / t_block_size[1]
+                    )
+                    num_blocks_miny = floor(
+                        (maxy - miny_bounded) / dataset.res / t_block_size[1]
+                    )
 
-                            if window_start is None:
-                                window_start = window
-
-                            if window.col_off <= col_end:
-                                window_end = window_current
-
-                            window_current = window
-
-                    if window_start is None or window_end is None:
+                    if (
+                        num_blocks_maxx == 0
+                        or num_blocks_maxx <= num_blocks_minx
+                        or num_blocks_miny == 0
+                        or num_blocks_miny < num_blocks_maxy
+                    ):
                         continue
 
-                    minx, _, _, maxy = src.window_bounds(window_start)
-                    _, miny, maxx, _ = src.window_bounds(window_end)
+                    minx_block = minx + num_blocks_minx * (
+                        t_block_size[0] * dataset.res
+                    )
+                    maxx_block = minx + num_blocks_maxx * (
+                        t_block_size[0] * dataset.res
+                    )
+                    maxy_block = maxy - num_blocks_maxy * (
+                        t_block_size[1] * dataset.res
+                    )
+                    miny_block = maxy - num_blocks_miny * (
+                        t_block_size[1] * dataset.res
+                    )
 
                     region_block = BoundingBox(
-                        minx, maxx, miny, maxy, bounds.mint, bounds.maxt
+                        minx_block,
+                        maxx_block,
+                        miny_block,
+                        maxy_block,
+                        bounds.mint,
+                        bounds.maxt,
                     )
 
                     self.index.insert(hit.id, tuple(region_block), hit.object)
@@ -254,7 +260,7 @@ class RandomBlockGeoSampler(BlockGeoSampler):
         .. versionchanged:: 0.3
            Added ``units`` parameter, changed default to pixel units
         """
-        super().__init__(dataset, roi)
+        super().__init__(dataset, block_size, roi)
 
         self.size = _to_tuple(size)
         self.block_size = _to_tuple(block_size)
@@ -346,7 +352,7 @@ class RandomBlockBatchGeoSampler(BlockBatchGeoSampler):
         .. versionchanged:: 0.3
            Added ``units`` parameter, changed default to pixel units
         """
-        super().__init__(dataset, roi)
+        super().__init__(dataset, roi, block_size)
 
         self.size = _to_tuple(size)
         self.block_size = _to_tuple(block_size)

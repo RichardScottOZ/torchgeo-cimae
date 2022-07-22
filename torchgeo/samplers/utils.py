@@ -3,16 +3,12 @@
 
 """Common sampler utilities."""
 
-from decimal import Decimal
-from math import ceil, floor
-from typing import Any, List, Optional, Sequence, Tuple, Union
-
+from math import floor
 import torch
-
 from ..datasets import BoundingBox
 
 
-def _to_tuple(value: Union[Tuple[float, float], float]) -> Tuple[float, float]:
+def _to_tuple(value: float | tuple[float, float]) -> tuple[float, float]:
     """Convert value to a tuple if it is not already a tuple.
 
     Args:
@@ -28,7 +24,7 @@ def _to_tuple(value: Union[Tuple[float, float], float]) -> Tuple[float, float]:
 
 
 def get_random_bounding_box(
-    bounds: BoundingBox, size: Union[Tuple[float, float], float], res: float
+    bounds: BoundingBox, size: float | tuple[float, float], res: float
 ) -> BoundingBox:
     """Returns a random bounding box within a given bounding box.
 
@@ -72,10 +68,10 @@ def get_random_bounding_box(
 
 def get_random_bounding_box_from_grid(
     block_bounds: BoundingBox,
-    size: Union[Tuple[float, float], float],
+    size: float | tuple[float, float],
     res: float,
-    block_size: Union[Tuple[float, float], float],
-    bounds: Optional[BoundingBox] = None,
+    block_size: float | tuple[float, float],
+    bounds: BoundingBox | None = None,
 ) -> BoundingBox:
     """Returns a random bounding box within a given bounding box.
 
@@ -101,7 +97,6 @@ def get_random_bounding_box_from_grid(
         raise ValueError("Size is larger than block size.")
 
     rands = torch.rand(4).tolist()
-
     minx, maxx, miny, maxy, mint, maxt = block_bounds
 
     num_blocks_x = (maxx - minx) // res // t_block_size[0]
@@ -131,8 +126,8 @@ def get_random_bounding_box_from_grid(
 def get_bounds_from_grid(
     bounds: BoundingBox,
     bounding_box: BoundingBox,
-    size: Union[Tuple[float, float], float],
-    block_size: Union[Tuple[float, float], float],
+    size: float | tuple[float, float],
+    block_size: float | tuple[float, float],
 ) -> BoundingBox:
     """get_bounds_from_grid."""
     t_size = _to_tuple(size)
