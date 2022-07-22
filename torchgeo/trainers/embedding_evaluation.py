@@ -180,20 +180,15 @@ class EmbeddingEvaluator(LightningModule):
         self.patch_wise = self.hyperparams.get("patch_wise", False)
         self.patch_size = self.hyperparams.get("patch_size", 16)
 
-        self.classifier: Module
-        if not self.patch_wise:
-            self.classifier = Linear(out_dim, num_classes)
-            self.classifier.weight.data.normal_(mean=0.0, std=0.01)
-            self.classifier.bias.data.zero_()
-        else:
-            self.classifier = Conv2d(
-                in_channels,
-                num_classes,
-                kernel_size=self.patch_size,
-                stride=self.patch_size,
+        if self.patch_wise:
+            self.num_patches = (crop_size[0] // self.patch_size) * (
+                crop_size[1] // self.patch_size
             )
-            w = self.classifier.weight.data
-            init.xavier_uniform_(w.view([w.shape[0], -1]))
+            out_dim = output.view(2, self.num_patches, -1).shape[-1]
+
+        self.classifier = Linear(out_dim, num_classes)
+        self.classifier.weight.data.normal_(mean=0.0, std=0.01)
+        self.classifier.bias.data.zero_()
 
         self.classifier_loss = CrossEntropyLoss()
 
@@ -279,17 +274,14 @@ class EmbeddingEvaluator(LightningModule):
 
     def classify(self, aug: Tensor, embeddings: Tensor) -> Tensor:
         """Classify the input tensor."""
-        if self.patch_wise:
-            B, _, H, _ = aug.shape
-            num_patches = (H // self.patch_size) ** 2
+        if not self.patch_wise:
+            y_hat = self.classifier(embeddings)
+            return cast(Tensor, y_hat)
 
-            embeddings = embeddings.view(B, num_patches, -1)
-            embeddings = unpatchify(embeddings, self.patch_size)
-
+        B, *_ = embeddings.shape
+        embeddings = embeddings.view(B, self.num_patches, -1)
         y_hat = self.classifier(embeddings)
-
-        if self.patch_wise:
-            y_hat = y_hat.mean(dim=(2, 3))
+        y_hat = y_hat.mean(dim=(1))
 
         return cast(Tensor, y_hat)
 
