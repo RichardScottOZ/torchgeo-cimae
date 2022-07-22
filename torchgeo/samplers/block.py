@@ -5,22 +5,16 @@
 
 import abc
 from math import ceil, floor
-from typing import Any, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Iterator, Optional, Sequence
 
 import rasterio
 import torch
-from rasterio.windows import from_bounds
 from rtree.index import Index, Property
 from torch.utils.data import Sampler
 
 from ..datasets import BoundingBox, GeoDataset
 from .constants import Units
-from .utils import (
-    _to_tuple,
-    get_bounds_from_grid,
-    get_random_bounding_box,
-    get_random_bounding_box_from_grid,
-)
+from .utils import _to_tuple, get_bounds_from_grid, get_random_bounding_box_from_grid
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
@@ -39,7 +33,7 @@ class BlockGeoSampler(Sampler[BoundingBox], abc.ABC):
     def __init__(
         self,
         dataset: GeoDataset,
-        roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+        roi: BoundingBox | Sequence[BoundingBox] | None = None,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -125,7 +119,7 @@ class BlockGeoSampler(Sampler[BoundingBox], abc.ABC):
         """
 
 
-class BlockBatchGeoSampler(Sampler[List[BoundingBox]], abc.ABC):
+class BlockBatchGeoSampler(Sampler[list[BoundingBox]], abc.ABC):
     """Abstract base class for sampling from :class:`~torchgeo.datasets.GeoDataset`.
 
     Unlike PyTorch's :class:`~torch.utils.data.BatchSampler`, :class:`BatchGeoSampler`
@@ -137,7 +131,7 @@ class BlockBatchGeoSampler(Sampler[List[BoundingBox]], abc.ABC):
     def __init__(
         self,
         dataset: GeoDataset,
-        roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+        roi: BoundingBox | Sequence[BoundingBox] | None = None,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -215,7 +209,7 @@ class BlockBatchGeoSampler(Sampler[List[BoundingBox]], abc.ABC):
         self.roi = roi
 
     @abc.abstractmethod
-    def __iter__(self) -> Iterator[List[BoundingBox]]:
+    def __iter__(self) -> Iterator[list[BoundingBox]]:
         """Return a batch of indices of a dataset.
 
         Returns:
@@ -233,10 +227,10 @@ class RandomBlockGeoSampler(BlockGeoSampler):
     def __init__(
         self,
         dataset: GeoDataset,
-        size: Union[Tuple[float, float], float],
-        block_size: Union[Tuple[float, float], float],
+        size: float | tuple[float, float],
+        block_size: float | tuple[float, float],
         length: int,
-        roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+        roi: BoundingBox | Sequence[BoundingBox] | None = None,
         units: Units = Units.PIXELS,
         **kwargs: Any,
     ) -> None:
@@ -323,11 +317,11 @@ class RandomBlockBatchGeoSampler(BlockBatchGeoSampler):
     def __init__(
         self,
         dataset: GeoDataset,
-        size: Union[Tuple[float, float], float],
-        block_size: Union[Tuple[float, float], float],
+        size: float | tuple[float, float],
+        block_size: float | tuple[float, float],
         batch_size: int,
         length: int,
-        roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+        roi: BoundingBox | Sequence[BoundingBox] | None = None,
         units: Units = Units.PIXELS,
         **kwargs: Any,
     ) -> None:
@@ -378,7 +372,7 @@ class RandomBlockBatchGeoSampler(BlockBatchGeoSampler):
         if torch.sum(self.areas) == 0:
             self.areas += 1
 
-    def __iter__(self) -> Iterator[List[BoundingBox]]:
+    def __iter__(self) -> Iterator[list[BoundingBox]]:
         """Return the indices of a dataset.
 
         Returns:
@@ -419,13 +413,13 @@ class TripletBlockBatchGeoSampler(BlockBatchGeoSampler):
     def __init__(
         self,
         dataset: GeoDataset,
-        size: Union[Tuple[float, float], float],
-        neighborhood: Union[Tuple[float, float], float],
+        size: float | tuple[float, float],
+        neighborhood: float | tuple[float, float],
         batch_size: int,
         length: int,
-        roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+        roi: BoundingBox | Sequence[BoundingBox] | None = None,
         units: Units = Units.PIXELS,
-        block_size: Union[Tuple[float, float], float] = 128,
+        block_size: float | tuple[float, float] = 128,
     ) -> None:
         """Initialize a new Sampler instance.
 
@@ -484,7 +478,7 @@ class TripletBlockBatchGeoSampler(BlockBatchGeoSampler):
         if torch.sum(self.areas) == 0:
             self.areas += 1
 
-    def __iter__(self) -> Iterator[List[BoundingBox]]:
+    def __iter__(self) -> Iterator[list[BoundingBox]]:
         """Return the indices of a dataset.
 
         Returns:
@@ -590,11 +584,11 @@ class TripletTileBlockBatchGeoSampler(BlockBatchGeoSampler):
     def __init__(
         self,
         dataset: GeoDataset,
-        size: Union[Tuple[float, float], float],
-        neighborhood: Union[Tuple[float, float], float],
+        size: float | tuple[float, float],
+        neighborhood: float | tuple[float, float],
         batch_size: int,
         length: int,
-        roi: Optional[Union[BoundingBox, Sequence[BoundingBox]]] = None,
+        roi: BoundingBox | Sequence[BoundingBox] | None = None,
         units: Units = Units.PIXELS,
         block_size: int = 128,
     ) -> None:
@@ -655,7 +649,7 @@ class TripletTileBlockBatchGeoSampler(BlockBatchGeoSampler):
         if torch.sum(self.areas) == 0:
             self.areas += 1
 
-    def __iter__(self) -> Iterator[List[BoundingBox]]:
+    def __iter__(self) -> Iterator[list[BoundingBox]]:
         """Return the indices of a dataset.
 
         Returns:
