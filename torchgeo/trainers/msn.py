@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from kornia import augmentation as K
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
-from torch.nn import Linear, Module, Sequential, init
+from torch.nn import Linear, Module, Sequential
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ..models import MaskedViT

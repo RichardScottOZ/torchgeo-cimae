@@ -11,7 +11,7 @@ from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
 from torch.nn import TripletMarginLoss
 from torch.nn.modules import Linear, Module, Sequential
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ..models import MaskedViT, resnet18, resnet50
 from ..utils import _to_tuple
@@ -121,21 +121,22 @@ class Tile2Vec(Module):
         self,
         encoder: Module,
         projector: Module | None = None,
-        patch_wise: bool = False,
+        mean_patches: bool = False,
         patch_size: int = 16,
     ) -> None:
-        """Sets up a model for pre-training with BYOL using projection heads.
+        """Sets up a model for pre-training with tile2vec using projection heads.
 
         Args:
-            model: the model to pretrain using BYOL
-            image_size: the size of the training images
-            augment_fn: an instance of a module that performs data augmentation
+            encoder: the encoder to pretrain using tile2vec
+            projector: the projector to project the patches
+            mean_patches: whether to use patchwise projection
+            patch_size: the size of the vit patches
         """
         super().__init__()
 
         self.encoder = encoder
         self.projector = projector
-        self.patch_wise = patch_wise
+        self.mean_patches = mean_patches
         self.patch_size = patch_size
 
     def forward(self, x: Tensor) -> Tensor:
@@ -149,7 +150,7 @@ class Tile2Vec(Module):
         """
         x = self.encoder(x).squeeze()
 
-        if not self.patch_wise:
+        if not self.mean_patches:
             return x
 
         if self.projector is not None:
@@ -167,7 +168,7 @@ class Tile2VecTask(LightningModule):
         """TODO: Docstring."""
         self.image_size: int = self.hyperparams.get("image_size", 256)
         self.crop_size: int = self.hyperparams.get("crop_size", 224)
-        self.patch_wise = self.hyperparams.get("patch_wise", False)
+        self.mean_patches = self.hyperparams.get("mean_patches", False)
         self.patch_size = self.hyperparams.get("patch_size", 16)
 
         pretrained = self.hyperparams.get("pretrained", False)
@@ -217,7 +218,7 @@ class Tile2VecTask(LightningModule):
                 f"Encoder type '{self.hyperparams['encoder_name']}' is not valid."
             )
 
-        self.model = Tile2Vec(encoder, projector, self.patch_wise, self.patch_size)
+        self.model = Tile2Vec(encoder, projector, self.mean_patches, self.patch_size)
         self.triplet_loss_fn = TripletMarginLoss(
             margin=self.hyperparams.get("margin", 0.1)
         )
@@ -259,24 +260,27 @@ class Tile2VecTask(LightningModule):
             a "lr dict" according to the pytorch lightning documentation --
             https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#configure-optimizers
         """
-        optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "Adam"))
+        optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "AdamW"))
         lr = self.hyperparams.get("lr", 1e-3)
-        weight_decay = self.hyperparams.get("weight_decay", 0)
-        betas = self.hyperparams.get("betas", (0.5, 0.999))
+        actual_lr = lr * self.hyperparams.get("batch_size", 64) / 256
+        weight_decay = self.hyperparams.get("weight_decay", 0.05)
+        betas = self.hyperparams.get("betas", (0.9, 0.95))
         optimizer = optimizer_class(
-            self.parameters(), lr=lr, weight_decay=weight_decay, betas=betas
+            self.parameters(), lr=actual_lr, weight_decay=weight_decay, betas=betas
         )
+
+        if self.trainer is None:
+            return {}
 
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
-                "scheduler": ReduceLROnPlateau(
+                "scheduler": CosineAnnealingLR(
                     optimizer,
-                    patience=self.hyperparams.get(
-                        "learning_rate_schedule_patience", 10
-                    ),
+                    self.trainer.max_epochs,
+                    self.hyperparams.get("min_lr", 1e-6),
                 ),
-                "monitor": f"train_loss",
+                "monitor": "val_loss",
             },
         }
 

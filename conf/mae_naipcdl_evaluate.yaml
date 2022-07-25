@@ -15,7 +15,7 @@ experiment:
     encoder_name: "vit"
     sensor: "naip"
     bands: "all"
-    patch_wise: True
+    mean_patches: True
     patch_size: 16
     in_channels: 4
     num_classes: 255

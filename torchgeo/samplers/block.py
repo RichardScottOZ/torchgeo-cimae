@@ -141,6 +141,7 @@ class BlockBatchGeoSampler(Sampler[list[BoundingBox]], abc.ABC):
 
         Args:
             dataset: dataset to index from
+            block_size: size of blocks
             roi: region of interest to sample from (minx, maxx, miny, maxy, mint, maxt)
                 (defaults to the bounds of ``dataset.index``)
         """
@@ -352,7 +353,7 @@ class RandomBlockBatchGeoSampler(BlockBatchGeoSampler):
         .. versionchanged:: 0.3
            Added ``units`` parameter, changed default to pixel units
         """
-        super().__init__(dataset, roi, block_size)
+        super().__init__(dataset, block_size, roi)
 
         self.size = _to_tuple(size)
         self.block_size = _to_tuple(block_size)

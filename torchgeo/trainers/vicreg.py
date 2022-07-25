@@ -139,7 +139,7 @@ class VICReg(Module):
         self,
         model: Module,
         projector: Module,
-        patch_wise: bool = True,
+        mean_patches: bool = True,
         patch_size: int = 16,
     ) -> None:
         """Setup the VICReg model.
@@ -147,12 +147,14 @@ class VICReg(Module):
         Args:
             model: The encoder model
             projector: The projector model
+            mean_patches: Whether to mean patches
+            patch_size: The patch size
         """
         super().__init__()
 
         self.encoder = model
         self.projector = projector
-        self.patch_wise = patch_wise
+        self.mean_patches = mean_patches
         self.patch_size = patch_size
 
     def forward(self, x: Tensor, *args: Any, **kwargs: Any) -> Tensor:
@@ -161,13 +163,11 @@ class VICReg(Module):
 
         embeddings = self.encoder(x, *args, **kwargs)
 
-        if not self.patch_wise:
-            embeddings = embeddings.view(B, -1)
-            embeddings = self.projector(embeddings)
-        else:
-            embeddings = unpatchify(embeddings, self.patch_size, flat=True)
-            embeddings = self.projector(embeddings)
-            embeddings = embeddings.mean((2, 3))
+        embeddings = embeddings.view(B, -1)
+        embeddings = self.projector(embeddings)
+
+        if self.mean_patches:
+            embeddings = embeddings.mean(1)
 
         return cast(Tensor, embeddings)
 
@@ -202,7 +202,7 @@ class Projector(Module):
         """Initialize the weights."""
         if isinstance(m, Linear):
             torch.nn.init.xavier_uniform_(m.weight)
-            if isinstance(m, Linear) and m.bias is not None:
+            if m.bias is not None:
                 init.constant_(m.bias, 0)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -221,7 +221,7 @@ class VICRegTask(LightningModule):
         bands = self.hyperparams.get("bands", "all")
         encoder = None
 
-        patch_wise = self.hyperparams.get("patch_wise", False)
+        mean_patches = self.hyperparams.get("mean_patches", False)
         patch_size = self.hyperparams.get("patch_size", 16)
         embed_dim = self.hyperparams.get("embed_dim", 512)
         projection_dim = self.hyperparams.get("projection_dim", 2048)
@@ -262,25 +262,13 @@ class VICRegTask(LightningModule):
                 f"Encoder type '{self.hyperparams['encoder_name']}' is not valid."
             )
 
-        projector: Module
-        if not patch_wise:
-            embedding_dim = encoder.fc.weight.shape[1]
-            projector = Projector(
-                num_layers=self.hyperparams.get("projector_num_layers", 3),
-                embedding_dim=embedding_dim,
-                projection_dim=projection_dim,
-            )
-        else:
-            projector = Conv2d(
-                embed_dim // patch_size**2,
-                projection_dim,
-                kernel_size=patch_size,
-                stride=patch_size,
-            )
-            w = projector.weight.data
-            init.xavier_uniform_(w.view([w.shape[0], -1]))
+        projector = Projector(
+            num_layers=self.hyperparams.get("projector_num_layers", 3),
+            embedding_dim=embed_dim,
+            projection_dim=projection_dim,
+        )
 
-        self.model = VICReg(encoder, projector, patch_wise, patch_size)
+        self.model = VICReg(encoder, projector, mean_patches, patch_size)
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize a LightningModule for pre-training a model with BYOL.
@@ -311,35 +299,24 @@ class VICRegTask(LightningModule):
             "augment_fn", Augmentations(image_size, crop_size)
         )
 
-    def configure_optimizers(self) -> Dict[str, Any]:
+    def configure_optimizers(self) -> dict[str, Any]:
         """Initialize the optimizer and learning rate scheduler.
 
         Returns:
             a "lr dict" according to the pytorch lightning documentation --
             https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#configure-optimizers
         """
+        optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "AdamW"))
+        lr = self.hyperparams.get("lr", 1e-3)
+        actual_lr = lr * self.hyperparams.get("batch_size", 64) / 256
+        weight_decay = self.hyperparams.get("weight_decay", 0.05)
+        betas = self.hyperparams.get("betas", (0.9, 0.95))
+        optimizer = optimizer_class(
+            self.parameters(), lr=actual_lr, weight_decay=weight_decay, betas=betas
+        )
+
         if self.trainer is None:
             return {}
-
-        lr = self.hyperparams.get("lr", 0.0)
-        momentum = self.hyperparams.get("momentum", 0.9)
-        eta = self.hyperparams.get("eta", 0.001)
-        weight_decay = self.hyperparams.get("weight_decay", 1e-6)
-        weight_decay_filter = self.hyperparams.get(
-            "weight_decay_filter", exclude_bias_and_norm
-        )
-        lars_adaptation_filter = self.hyperparams.get(
-            "lars_adaptation_filter", exclude_bias_and_norm
-        )
-        optimizer = LARS(
-            params=self.parameters(),
-            lr=lr,
-            weight_decay=weight_decay,
-            momentum=momentum,
-            eta=eta,
-            weight_decay_filter=weight_decay_filter,
-            lars_adaptation_filter=lars_adaptation_filter,
-        )
 
         return {
             "optimizer": optimizer,
@@ -347,7 +324,7 @@ class VICRegTask(LightningModule):
                 "scheduler": CosineAnnealingLR(
                     optimizer,
                     self.trainer.max_epochs,
-                    self.hyperparams.get("min_lr", 0.002),
+                    self.hyperparams.get("min_lr", 1e-6),
                 ),
                 "monitor": "val_loss",
             },

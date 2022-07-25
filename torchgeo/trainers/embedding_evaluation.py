@@ -95,7 +95,10 @@ class EmbeddingEvaluator(LightningModule):
             else:
                 task = Tile2VecTask(**self.hyperparams)
             task.freeze()
-            self.encoder = task.model.encoder
+            if "resnet" in self.hyperparams["encoder_name"]:
+                self.encoder = task.model.encoder
+            else:
+                self.encoder = task.model
         elif self.hyperparams["task_name"] == "byol":
             if "checkpoint_path" in self.hyperparams and isfile(
                 self.hyperparams["checkpoint_path"]
@@ -176,10 +179,10 @@ class EmbeddingEvaluator(LightningModule):
 
         out_dim = output.shape[1]
         num_classes = self.hyperparams["num_classes"]
-        self.patch_wise = self.hyperparams.get("patch_wise", False)
+        self.mean_patches = self.hyperparams.get("mean_patches", False)
         self.patch_size = self.hyperparams.get("patch_size", 16)
 
-        if self.patch_wise:
+        if self.mean_patches:
             self.num_patches = (crop_size[0] // self.patch_size) * (
                 crop_size[1] // self.patch_size
             )
@@ -273,14 +276,14 @@ class EmbeddingEvaluator(LightningModule):
 
     def classify(self, aug: Tensor, embeddings: Tensor) -> Tensor:
         """Classify the input tensor."""
-        if not self.patch_wise:
+        if not self.mean_patches:
             y_hat = self.classifier(embeddings)
             return cast(Tensor, y_hat)
 
         B, *_ = embeddings.shape
         embeddings = embeddings.view(B, self.num_patches, -1)
         y_hat = self.classifier(embeddings)
-        y_hat = y_hat.mean(dim=(1))
+        y_hat = y_hat.mean(dim=1)
 
         return cast(Tensor, y_hat)
 

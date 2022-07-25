@@ -11,18 +11,18 @@ experiment:
     test: False
   module:
     model: "vicreg"
-    # encoder_name: "resnet18"
     encoder_name: "vit"
     sensor: "naip"
     imagenet_pretrained: False
     pretrained: False
     image_size: 256
     crop_size: 224
-    patch_wise: True
-    patch_size: 16    # ViT
-    embed_dim: 1024   # ViT
-    depth: 6          # ViT
-    num_heads: 1      # ViT
+    batch_size: 128
+    mean_patches: True
+    patch_size: 16   
+    embed_dim: 1024  
+    depth: 6         
+    num_heads: 1     
     projector_num_layers: 3
     projection_dim: 2048
     lr: 0.0

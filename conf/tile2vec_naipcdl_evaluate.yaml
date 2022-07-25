@@ -1,7 +1,7 @@
 trainer:
-  gpus: 1
+  gpus: [0]
   max_epochs: 20
-  precision: 16
+  precision: 32
   benchmark: True
 experiment:
   task: "tile2vec_naipcdl_evaluate"
@@ -15,8 +15,9 @@ experiment:
     encoder_name: "resnet18"
     sensor: "naip"
     num_classes: 255
-    patch_size: 50
-    load_checkpoint: ""
+    image_size: 256
+    crop_size: 224
+    load_checkpoint: "last.ckpt"
     imagenet_pretrained: False
     lr: 0.02
     momentum: 0.9
@@ -25,14 +26,14 @@ experiment:
     projector_embeddings: False
     learning_rate_schedule_patience: 6
   datamodule:
-    naip_root_dir: "/scratch/NAIP"
-    cdl_root_dir: "/scratch/CDL"
-    batch_size: 256
+    naip_root_dir: "/data/users/mike/data/NAIP"
+    cdl_root_dir: "/data/users/mike/data/CDL"
+    batch_size: 128
     train_length: 10000
     val_length: 1250
     test_length: 10000
-    num_workers: 4
-    patch_size: 50
+    num_workers: 8
+    patch_size: 256
     dataset_split: "roi_split_grid"
     number_of_cells: 12
     area_of_interest:

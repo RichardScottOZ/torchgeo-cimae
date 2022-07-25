@@ -30,10 +30,10 @@ MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
 
 
 def embedding_loss(
-    embedding1: Tensor, embedding2: Tensor, patch_wise: bool = True
+    embedding1: Tensor, embedding2: Tensor, mean_patches: bool = True
 ) -> Tensor:
     """Compute embedding loss."""
-    if not patch_wise:
+    if not mean_patches:
         return F.mse_loss(embedding1.mean(dim=(-2, -1)), embedding2.mean(dim=(-2, -1)))
 
     return F.mse_loss(embedding1, embedding2)
