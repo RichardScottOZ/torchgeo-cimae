@@ -104,8 +104,8 @@ class BlockGeoSampler(Sampler[BoundingBox], abc.ABC):
                         maxx_block,
                         miny_block,
                         maxy_block,
-                        bounds.mint,
-                        bounds.maxt,
+                        region.mint,
+                        region.maxt,
                     )
 
                     self.index.insert(hit.id, tuple(region_block), hit.object)
@@ -206,8 +206,8 @@ class BlockBatchGeoSampler(Sampler[list[BoundingBox]], abc.ABC):
                         maxx_block,
                         miny_block,
                         maxy_block,
-                        bounds.mint,
-                        bounds.maxt,
+                        region.mint,
+                        region.maxt,
                     )
 
                     self.index.insert(hit.id, tuple(region_block), hit.object)
