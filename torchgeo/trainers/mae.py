@@ -108,6 +108,7 @@ class MAETask(LightningModule):
         self.patch_size = self.hyperparams.get("patch_size", 16)
         self.channel_wise = self.hyperparams.get("channel_wise", False)
         self.batch_size = self.hyperparams.get("batch_size", 64)
+        self.channel_shuffle = self.hyperparams.get("channel_shuffle", False)
 
         self.model = MaskedAutoencoderViT(
             sensor=self.hyperparams["sensor"],
@@ -218,18 +219,27 @@ class MAETask(LightningModule):
         with torch.no_grad():
             aug = self.augment(x, stage)
 
+            if self.channel_shuffle:
+                encoder_channels = torch.randperm(C)
+                decoder_channels = torch.randperm(C)
+
+                aug_shuffled = aug[:, encoder_channels]
+                aug = aug[:, decoder_channels]
+            else:
+                aug_shuffled = aug
+
             num_patches = (self.crop_size // self.patch_size) ** 2
             if self.channel_wise:
                 num_patches *= C
-                aug = aug.flatten(0, 1).unsqueeze(1)
+                aug_shuffled = aug_shuffled.flatten(0, 1).unsqueeze(1)
 
             mask = torch.zeros((B, num_patches), device=aug.device, dtype=torch.bool)
             for masking_name in self.mask_fn:
-                mask = MASKING_FUNCTIONS[masking_name](aug, mask, **self.mask_kwargs)
+                mask = MASKING_FUNCTIONS[masking_name](
+                    aug_shuffled, mask, **self.mask_kwargs
+                )
 
-            aug_shuffled = aug  # aug[:, torch.randperm(C)]
-
-        pred = self.forward(aug_shuffled, mask)
+        pred = self.forward(aug_shuffled, mask, encoder_channels, decoder_channels)
         loss = masked_reconstruction_loss(aug, pred, mask, self.patch_size)
 
         self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
@@ -261,7 +271,6 @@ class MAETask(LightningModule):
         """
         _, aug, aug_shuffled, pred, mask = self.shared_step("val", *args, **kwargs)
 
-        aug_shuffled = aug_shuffled[:, :3]
         aug_patch = patchify(aug_shuffled, self.patch_size)
 
         mask_expanded = (~mask.bool()).unsqueeze(-1).expand(aug_patch.shape)

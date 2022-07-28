@@ -2,13 +2,14 @@
 
 from typing import cast
 
+import numpy as np
 import torch
 from kornia.contrib.vit import TransformerEncoderBlock
 from torch import Tensor
 from torch.nn import Conv2d, LayerNorm, Linear, Module, Sequential, init
 from torch.nn.parameter import Parameter
 
-from .utils import get_2d_sincos_pos_embed
+from .utils import get_1d_sincos_pos_embed_from_grid, get_2d_sincos_pos_embed
 
 IN_CHANNELS = {"sentinel2": {"all": 10}, "naip": {"all": 4}}
 NUM_CLASSES = {"sentinel2": 17, "naip": 0}
@@ -69,6 +70,7 @@ class EncoderEmbedding(Module):
         self.initialize_positional_embeddings(
             image_size, patch_size, embed_dim, channels
         )
+
         self.initialize_weights()
 
     def initialize_positional_embeddings(
@@ -91,7 +93,7 @@ class EncoderEmbedding(Module):
         )
 
         positional_embeddings_tensor = torch.from_numpy(positional_embeddings).float()
-        if len(channels) == 0:
+        if not len(channels):
             positional_embeddings_tensor = positional_embeddings_tensor.unsqueeze(0)
 
         self.positional_embeddings.data.copy_(positional_embeddings_tensor)
@@ -160,7 +162,27 @@ class MaskedEncoderViT(Module):
             init.constant_(m.bias, 0)
             init.constant_(m.weight, 1.0)
 
-    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
+    def get_channel_tokens(self, x: Tensor, channels: list[int]) -> Tensor:
+        """TODO: Docstring."""
+        B, _, H = x.shape
+
+        channel_tokens = (
+            torch.from_numpy(get_1d_sincos_pos_embed_from_grid(H, np.array(channels)))
+            .float()
+            .to(x.device)
+        )
+
+        positions = np.arange(len(channels))
+        position_encodings = torch.from_numpy(get_1d_sincos_pos_embed_from_grid(H, positions))  # type: ignore
+
+        channel_tokens += position_encodings
+        channel_tokens = channel_tokens.repeat(B, 1, 1)
+
+        return channel_tokens
+
+    def forward(
+        self, x: Tensor, mask: Tensor | None = None, channels: list[int] = []
+    ) -> Tensor:
         """Forward pass of the model."""
         x = self.embed_module(x)
 
@@ -168,8 +190,15 @@ class MaskedEncoderViT(Module):
             B, _, H = x.shape
             x = x[~mask].view(B, -1, H)
 
+        if len(channels):
+            channel_tokens = self.get_channel_tokens(x, channels)
+            x = torch.cat([channel_tokens, x], dim=1)
+
         x = self.encoder(x)
         x = self.norm(x)
+
+        if len(channels):
+            x = x[:, len(channels) :]
 
         return x
 
@@ -182,21 +211,24 @@ class DecoderEmbedding(Module):
         num_patches: int,
         input_dim: int = 3,
         embed_dim: int = 768,
-        channels: list[int] = [],
+        in_channels: int = 3,
+        channel_wise: bool = False,
     ) -> None:
         """TODO: Docstring."""
         super().__init__()
 
         self.num_patches = num_patches
-        if len(channels):
+        if channel_wise:
             self.num_patches *= in_channels
         self.embed_dim = embed_dim
-        self.channels
+        self.in_channels = in_channels
+        self.channel_wise = channel_wise
 
         self.embedder = Linear(input_dim, embed_dim, bias=True)
 
         self.mask_token = Parameter(-torch.ones(1, 1, embed_dim), requires_grad=False)
 
+        channels = torch.arange(in_channels).tolist() if channel_wise else []
         self.initialize_positional_embeddings(embed_dim, channels)
         self.apply(self._init_weights)
 
@@ -218,7 +250,7 @@ class DecoderEmbedding(Module):
         )
 
         positional_embeddings_tensor = torch.from_numpy(positional_embeddings).float()
-        if len(channels) == 0:
+        if not len(channels):
             positional_embeddings_tensor = positional_embeddings_tensor.unsqueeze(0)
 
         self.positional_embeddings.data.copy_(positional_embeddings_tensor)
@@ -305,11 +337,39 @@ class MaskedDecoderViT(Module):
             init.constant_(m.bias, 0)
             init.constant_(m.weight, 1.0)
 
-    def forward(self, x: Tensor, mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
+    def get_channel_tokens(self, x: Tensor, channels: list[int]) -> Tensor:
+        """TODO: Docstring."""
+        B, _, H = x.shape
+
+        channel_tokens = (
+            torch.from_numpy(get_1d_sincos_pos_embed_from_grid(H, np.array(channels)))
+            .float()
+            .to(x.device)
+        )
+
+        positions = np.arange(len(channels))
+        position_encodings = torch.from_numpy(get_1d_sincos_pos_embed_from_grid(H, positions)).float().to(x.device)  # type: ignore
+
+        channel_tokens += position_encodings
+        channel_tokens = channel_tokens.repeat(B, 1, 1)
+
+        return channel_tokens
+
+    def forward(
+        self, x: Tensor, mask: Tensor | None = None, channels: list[int] = []
+    ) -> tuple[Tensor, Tensor]:
         """Forward pass of the model."""
         x, latent = self.embed_module(x, mask)
+
+        if len(channels):
+            channel_tokens = self.get_channel_tokens(x, channels)
+            x = torch.cat([channel_tokens, x], dim=1)
+
         x = self.decoder(x)
         x = self.norm(x)
+
+        if len(channels):
+            x = x[:, len(channels) :]
 
         x = self.predictor(x)
 
@@ -378,11 +438,15 @@ class MaskedAutoencoderViT(Module):
         )
 
     def forward(
-        self, x: Tensor, mask: Tensor | None = None
+        self,
+        x: Tensor,
+        mask: Tensor | None = None,
+        encoder_channels: list[int] = [],
+        decoder_channels: list[int] = [],
     ) -> Tensor | tuple[Tensor, Tensor]:
         """Forward pass of the model."""
-        latent = self.encoder(x, mask)
-        pred, latent = self.decoder(latent, mask)
+        latent = self.encoder(x, mask, encoder_channels)
+        pred, latent = self.decoder(latent, mask, decoder_channels)
 
         if self.return_latent:
             return pred, latent

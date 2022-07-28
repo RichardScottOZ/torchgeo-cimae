@@ -344,9 +344,7 @@ class MSAETask(LightningModule):
         loss_rec2 = masked_reconstruction_loss(
             aug2[:, :3], pred2, mask2, self.patch_size
         )
-        loss_embedding = embedding_loss(
-            latent1, latent2, self.dense_embed
-        )
+        loss_embedding = embedding_loss(latent1, latent2, self.dense_embed)
         loss = loss_embedding + (loss_rec1 + loss_rec2) / 2
 
         self.log_dict(
