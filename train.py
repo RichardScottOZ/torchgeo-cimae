@@ -188,9 +188,9 @@ def main(conf: DictConfig) -> None:
                 + "we might overwrite data in it!"
             )
         else:
-            raise FileExistsError(
+            print(
                 f"The experiment directory, {run_dir}, already exists and isn't "
-                + "empty. We don't want to overwrite any existing results, exiting..."
+                + "empty. We don't want to overwrite any existing results, no data will be saved."
             )
 
     with open(os.path.join(run_dir, "experiment_config.yaml"), "w") as f:
@@ -252,10 +252,11 @@ def main(conf: DictConfig) -> None:
         )
 
     callbacks: List[Callback] = []
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_loss", dirpath=run_dir, save_top_k=1, save_last=True
-    )
-    callbacks.append(checkpoint_callback)
+    if conf.program.overwrite:
+        checkpoint_callback = ModelCheckpoint(
+            monitor="val_loss", dirpath=run_dir, save_top_k=1, save_last=True
+        )
+        callbacks.append(checkpoint_callback)
 
     if "early_stopping" in trainer_args:
         early_stopping_callback = EarlyStopping(
