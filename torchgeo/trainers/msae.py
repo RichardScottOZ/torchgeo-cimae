@@ -34,7 +34,7 @@ def embedding_loss(
 ) -> Tensor:
     """Compute embedding loss."""
     if not mean_patches:
-        return F.mse_loss(embedding1.mean(dim=(-2, -1)), embedding2.mean(dim=(-2, -1)))
+        return F.mse_loss(embedding1.mean(dim=1), embedding2.mean(dim=1))
 
     return F.mse_loss(embedding1, embedding2)
 
@@ -192,6 +192,7 @@ class MSAETask(LightningModule):
         self.crop_size: int = self.hyperparams.get("crop_size", 224)
         self.patch_size: int = self.hyperparams.get("patch_size", 16)
         self.embed_dim: int = self.hyperparams.get("embed_dim", 512)
+        self.dense_embed: bool = self.hyperparams.get("dense_embed", False)
 
         self.model = MaskedAutoencoderViT(
             sensor=self.hyperparams["sensor"],
@@ -303,8 +304,11 @@ class MSAETask(LightningModule):
 
         with torch.no_grad():
             # Augment img and generate mask
-            aug = self.augment(x, stage)
-            mask = self.generate_mask(x)
+            aug1 = self.augment(x, stage)
+            aug2 = aug1 if self.dense_embed else self.augment(x, stage)
+
+            mask1 = self.generate_mask(aug1)
+            mask2 = mask1 if self.dense_embed else self.generate_mask(aug2)
 
             # Shuffle img channels
             channels1_shuffle, channels2_shuffle = (
@@ -312,34 +316,37 @@ class MSAETask(LightningModule):
                 torch.randperm(C),
             )
             aug1_shuffled, aug2_shuffled = (
-                aug[:, channels1_shuffle],
-                aug[:, channels2_shuffle],
+                aug1[:, channels1_shuffle],
+                aug2[:, channels2_shuffle],
             )
 
             # Transform img and mask
-            aug1_shuffled, mask1 = self.augment(aug1_shuffled, "transform", mask)
-            aug2_shuffled, mask2 = self.augment(aug2_shuffled, "transform_prime", mask)
+            aug1_shuffled, mask1 = self.augment(aug1_shuffled, "transform", mask1)
+            aug2_shuffled, mask2 = self.augment(aug2_shuffled, "transform_prime", mask2)
 
         # Forward pass
         pred1, latent1 = self.forward(aug1_shuffled, mask1)
         pred2, latent2 = self.forward(aug2_shuffled, mask2)
 
         # Restore transform augmentation
-        pred1_res, mask1_res, latent1_res = self.augment.inverse(
-            pred1, mask1, latent1, mask, "transform"
-        )
-        pred2_res, mask2_res, latent2_res = self.augment.inverse(
-            pred2, mask2, latent2, mask, "transform_prime"
-        )
+        if self.dense_embed:
+            pred1, mask1, latent1 = self.augment.inverse(
+                pred1, mask1, latent1, mask1, "transform"
+            )
+            pred2, mask2, latent2 = self.augment.inverse(
+                pred2, mask2, latent2, mask2, "transform_prime"
+            )
 
         # Calculate losses
         loss_rec1 = masked_reconstruction_loss(
-            aug[:, :3], pred1_res, mask1_res, self.patch_size
+            aug1[:, :3], pred1, mask1, self.patch_size
         )
         loss_rec2 = masked_reconstruction_loss(
-            aug[:, :3], pred2_res, mask2_res, self.patch_size
+            aug2[:, :3], pred2, mask2, self.patch_size
         )
-        loss_embedding = embedding_loss(latent1_res, latent2_res)
+        loss_embedding = embedding_loss(
+            latent1, latent2, self.dense_embed
+        )
         loss = loss_embedding + (loss_rec1 + loss_rec2) / 2
 
         self.log_dict(
@@ -358,11 +365,11 @@ class MSAETask(LightningModule):
             "loss_embedding": loss_embedding,
             "loss_rec1": loss_rec1,
             "loss_rec2": loss_rec2,
-            "aug1": aug,
+            "aug1": aug1,
             "aug1_shuffled": aug1_shuffled,
             "pred1": pred1,
             "mask1": mask1,
-            "aug2": aug,
+            "aug2": aug2,
             "aug2_shuffled": aug2_shuffled,
             "pred2": pred2,
             "mask2": mask2,
@@ -446,7 +453,6 @@ class MSAETask(LightningModule):
         """Log images."""
         images1 = validation_step_outputs[0]["images1"]  # type: ignore
         images2 = validation_step_outputs[0]["images2"]  # type: ignore
-        _, B, *_ = images1.shape
 
         grid1 = make_grid(images1[:, :8].flatten(0, 1)[:, :3], nrow=8)
         images1 = wandb.Image(grid1, caption="Images")

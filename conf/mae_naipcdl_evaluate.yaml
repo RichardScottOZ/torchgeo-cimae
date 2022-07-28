@@ -21,6 +21,7 @@ experiment:
     num_classes: 255
     image_size: 256
     crop_size: 224
+    channel_wise: False
     load_checkpoint: "last.ckpt"
     imagenet_pretrained: False
     lr: 0.02
@@ -35,7 +36,7 @@ experiment:
     val_length: 1250
     test_length: 10000
     num_workers: 8
-    patch_size: 256
+    patch_size: 240
     dataset_split: "roi_split_grid"
     number_of_cells: 12
     area_of_interest:
