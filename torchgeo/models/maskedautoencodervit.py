@@ -58,7 +58,6 @@ class EncoderEmbedding(Module):
         self.input_dim = input_dim
         self.channel_wise = channel_wise
 
-        # logic needed in case a backbone is passed
         self.embedder = Conv2d(
             input_dim if not channel_wise else 1,
             embed_dim,
@@ -105,13 +104,15 @@ class EncoderEmbedding(Module):
     def forward(self, x: Tensor) -> Tensor:
         """TODO: Docstring."""
         x = self.embedder(x)
-        B, C, _, _ = x.shape
-        x = x.view(B, C, -1).permute(0, 2, 1)  # BxCxPSxPS -> BxPxH
+
+        B, C, PW, _ = x.shape
+        x = x.view(B, C, PW**2).permute(0, 2, 1)  # BxCxPSxPS -> BxPxH
 
         if self.channel_wise:
             x += self.positional_embeddings.repeat_interleave(
                 B // self.input_dim, dim=0
             )
+            x = x.reshape(-1, self.input_dim * PW**2, C)
         else:
             x += self.positional_embeddings
 
@@ -181,22 +182,21 @@ class DecoderEmbedding(Module):
         num_patches: int,
         input_dim: int = 3,
         embed_dim: int = 768,
-        in_channels: int = 3,
-        channel_wise: bool = False,
+        channels: list[int] = [],
     ) -> None:
         """TODO: Docstring."""
         super().__init__()
 
         self.num_patches = num_patches
+        if len(channels):
+            self.num_patches *= in_channels
         self.embed_dim = embed_dim
-        self.channel_wise = channel_wise
-        self.in_channels = in_channels
+        self.channels
 
         self.embedder = Linear(input_dim, embed_dim, bias=True)
 
         self.mask_token = Parameter(-torch.ones(1, 1, embed_dim), requires_grad=False)
 
-        channels = torch.arange(in_channels).tolist() if channel_wise else []
         self.initialize_positional_embeddings(embed_dim, channels)
         self.apply(self._init_weights)
 

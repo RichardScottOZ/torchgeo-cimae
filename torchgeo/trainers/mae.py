@@ -29,10 +29,10 @@ MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
 
 
 def masked_reconstruction_loss(
-    x: Tensor, pred: Tensor, mask: Tensor, patch_size: int
+    target: Tensor, pred: Tensor, mask: Tensor, patch_size: int
 ) -> Tensor:
     """Compute masked reconstruction loss."""
-    target = patchify(x, patch_size)
+    target = patchify(target, patch_size)
     target = target.view(pred.shape)
 
     loss = (pred - target) ** 2
@@ -107,6 +107,7 @@ class MAETask(LightningModule):
         self.crop_size = self.hyperparams.get("crop_size", 224)
         self.patch_size = self.hyperparams.get("patch_size", 16)
         self.channel_wise = self.hyperparams.get("channel_wise", False)
+        self.batch_size = self.hyperparams.get("batch_size", 64)
 
         self.model = MaskedAutoencoderViT(
             sensor=self.hyperparams["sensor"],
@@ -173,7 +174,7 @@ class MAETask(LightningModule):
         """
         optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "AdamW"))
         lr = self.hyperparams.get("lr", 1e-3)
-        actual_lr = lr * self.hyperparams.get("batch_size", 64) / 256
+        actual_lr = lr * self.batch_size / 256
         weight_decay = self.hyperparams.get("weight_decay", 0.05)
         betas = self.hyperparams.get("betas", (0.9, 0.95))
         optimizer = optimizer_class(
@@ -219,10 +220,8 @@ class MAETask(LightningModule):
 
             num_patches = (self.crop_size // self.patch_size) ** 2
             if self.channel_wise:
-                B *= C
-                aug = (
-                    aug.transpose(1, 0).flatten(0, 1).unsqueeze(1)
-                )  # Reorder per channel
+                num_patches *= C
+                aug = aug.flatten(0, 1).unsqueeze(1)
 
             mask = torch.zeros((B, num_patches), device=aug.device, dtype=torch.bool)
             for masking_name in self.mask_fn:
@@ -236,12 +235,8 @@ class MAETask(LightningModule):
         self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
 
         if self.channel_wise:
-            aug = torch.stack(aug.split(B // C), 0).transpose(1, 0).flatten(0, 1)
-            aug_shuffled = (
-                torch.stack(aug_shuffled.split(B // C), 0).transpose(1, 0).flatten(0, 1)
-            )
-            pred = torch.stack(pred.split(B // C), 0).transpose(1, 0).flatten(0, 1)
-            mask = torch.stack(mask.split(B // C), 0).transpose(1, 0).flatten(0, 1)
+            pred = pred.view(B * C, num_patches // C, -1)
+            mask = mask.view(B * C, -1)
 
         return loss, aug, aug_shuffled, pred, mask
 
@@ -276,7 +271,12 @@ class MAETask(LightningModule):
         pred = unpatchify(pred, self.patch_size)
         masked_aug = unpatchify(masked_aug, self.patch_size)
 
-        return {"images": torch.stack([aug[:, :3], masked_aug, pred[:, :3]])}
+        if not self.channel_wise:
+            return {"images": torch.stack([aug[:, :3], masked_aug, pred[:, :3]])}
+
+        aug = aug.view(self.batch_size, -1, self.crop_size, self.crop_size)
+        pred = pred.view(self.batch_size, -1, self.crop_size, self.crop_size)
+        return {"images": torch.stack([aug[:, :3], pred[:, :3]])}
 
     def validation_epoch_end(
         self,

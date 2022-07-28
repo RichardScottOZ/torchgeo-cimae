@@ -82,6 +82,8 @@ class EmbeddingEvaluator(LightningModule):
     def config_task(self) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
         """Configures the task based on kwargs parameters passed to the constructor."""
+        self.channel_wise = self.hyperparams.get("channel_wise", False)
+
         self.projector: Optional[Module] = None
 
         if self.hyperparams["task_name"] == "tile2vec":
@@ -169,7 +171,9 @@ class EmbeddingEvaluator(LightningModule):
         crop_size = _to_tuple(crop_size)
 
         in_channels = self.hyperparams.get("in_channels", 4)
-        output = self.encoder(torch.zeros((2, in_channels, crop_size[0], crop_size[1])))
+        output = self.get_embeddings(
+            torch.zeros((2, in_channels, crop_size[0], crop_size[1]))
+        )
         if isinstance(output, Sequence):
             output = output[0]
         output = output.reshape(2, -1)
@@ -263,6 +267,9 @@ class EmbeddingEvaluator(LightningModule):
     def get_embeddings(self, x: Tensor) -> Tensor:
         """TODO: Docstring."""
         B, *_ = x.shape
+
+        if self.channel_wise:
+            x = x.transpose(1, 0).flatten(0, 1).unsqueeze(1)  # Reorder per channel
 
         embeddings: Tensor = self.encoder(x)
         if isinstance(embeddings, Sequence):

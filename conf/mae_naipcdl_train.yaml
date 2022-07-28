@@ -43,8 +43,8 @@ experiment:
       - "2017-01-01"
       - "EPSG:4326"
       - "EPSG:26911"
-    train_sampler_class: "RandomBlockGeoSampler"
-    val_sampler_class: "RandomBlockGeoSampler"
+    train_sampler_class: "RandomBlockBatchGeoSampler"
+    val_sampler_class: "RandomBlockBatchGeoSampler"
     val_pct: 0.14
     test_pct: 0.14
     cache: True
