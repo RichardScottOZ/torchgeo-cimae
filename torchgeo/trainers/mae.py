@@ -29,10 +29,11 @@ MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
 
 
 def masked_reconstruction_loss(
-    x: Tensor, pred: Tensor, mask: Tensor, patch_size: int, visible_prob: float = 0.0
+    x: Tensor, pred: Tensor, mask: Tensor, patch_size: int
 ) -> Tensor:
     """Compute masked reconstruction loss."""
     target = patchify(x, patch_size)
+    target = target.view(pred.shape)
 
     loss = (pred - target) ** 2
     loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
@@ -105,12 +106,14 @@ class MAETask(LightningModule):
         self.image_size = self.hyperparams.get("image_size", 256)
         self.crop_size = self.hyperparams.get("crop_size", 224)
         self.patch_size = self.hyperparams.get("patch_size", 16)
+        self.channel_wise = self.hyperparams.get("channel_wise", False)
 
         self.model = MaskedAutoencoderViT(
             sensor=self.hyperparams["sensor"],
             bands=self.hyperparams.get("bands", "all"),
             image_size=self.crop_size,
             patch_size=self.patch_size,
+            channel_wise=self.channel_wise,
             embed_dim=self.hyperparams.get("embed_dim", 1024),
             depth=self.hyperparams.get("depth", 24),
             num_heads=self.hyperparams.get("num_heads", 16),
@@ -123,16 +126,14 @@ class MAETask(LightningModule):
             decoder_dropout_attn=self.hyperparams.get("decoder_dropout_attn", 0.0),
         )
 
-        self.mask_fn = self.hyperparams.get(
-            "mask_fn", ["focal_masking", "random_masking"]
-        )
+        self.mask_fn = self.hyperparams.get("mask_fn", ["random_masking"])
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
-                "focal_mask_ratio": 0.3,
-                "focal_mask_probability": 0.3,
+                # "focal_mask_ratio": 0.3,
+                # "focal_mask_probability": 0.3,
                 "random_mask_ratio": 0.7,
-                "random_mask_probability": 0.8,
+                "random_mask_probability": 1.0,
             },
         )
 
@@ -214,18 +215,33 @@ class MAETask(LightningModule):
         B, C, *_ = x.shape
 
         with torch.no_grad():
-            num_patches = (self.crop_size // self.patch_size) ** 2
-            mask = torch.zeros((B, num_patches), device=x.device, dtype=torch.bool)
-            for masking_name in self.mask_fn:
-                mask = MASKING_FUNCTIONS[masking_name](x, mask, **self.mask_kwargs)
-
             aug = self.augment(x, stage)
-            aug_shuffled = aug[:, torch.randperm(C)]
+
+            num_patches = (self.crop_size // self.patch_size) ** 2
+            if self.channel_wise:
+                B *= C
+                aug = (
+                    aug.transpose(1, 0).flatten(0, 1).unsqueeze(1)
+                )  # Reorder per channel
+
+            mask = torch.zeros((B, num_patches), device=aug.device, dtype=torch.bool)
+            for masking_name in self.mask_fn:
+                mask = MASKING_FUNCTIONS[masking_name](aug, mask, **self.mask_kwargs)
+
+            aug_shuffled = aug  # aug[:, torch.randperm(C)]
 
         pred = self.forward(aug_shuffled, mask)
-        loss = masked_reconstruction_loss(aug[:, :3], pred, mask, self.patch_size)
+        loss = masked_reconstruction_loss(aug, pred, mask, self.patch_size)
 
         self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
+
+        if self.channel_wise:
+            aug = torch.stack(aug.split(B // C), 0).transpose(1, 0).flatten(0, 1)
+            aug_shuffled = (
+                torch.stack(aug_shuffled.split(B // C), 0).transpose(1, 0).flatten(0, 1)
+            )
+            pred = torch.stack(pred.split(B // C), 0).transpose(1, 0).flatten(0, 1)
+            mask = torch.stack(mask.split(B // C), 0).transpose(1, 0).flatten(0, 1)
 
         return loss, aug, aug_shuffled, pred, mask
 
@@ -242,7 +258,7 @@ class MAETask(LightningModule):
 
         return loss
 
-    def validation_step(self, *args: Any, **kwargs: Any) -> Tensor:
+    def validation_step(self, *args: Any, **kwargs: Any) -> dict[str, Tensor]:
         """Compute validation loss.
 
         Args:
@@ -260,18 +276,17 @@ class MAETask(LightningModule):
         pred = unpatchify(pred, self.patch_size)
         masked_aug = unpatchify(masked_aug, self.patch_size)
 
-        return torch.stack([aug[:, :3], masked_aug, pred])
+        return {"images": torch.stack([aug[:, :3], masked_aug, pred[:, :3]])}
 
     def validation_epoch_end(
         self,
         validation_step_outputs: list[Tensor | dict[str, Any]]
-        | list[list[Tensor | dict[str, Any]],],
+        | list[list[Tensor | dict[str, Any]]],
     ) -> None:
         """Log images."""
-        images = validation_step_outputs[0]  # type: ignore
-        _, B, *_ = images.shape
+        images = validation_step_outputs[0]["images"]  # type: ignore
 
-        grid = make_grid(images[:, :10].flatten(0, 1)[:, :3], nrow=10)
+        grid = make_grid(images[:, :8].flatten(0, 1)[:, :3])
         images = wandb.Image(grid, caption="Images")
 
         wandb.log({"Images": images})

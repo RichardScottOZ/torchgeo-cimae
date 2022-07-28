@@ -45,35 +45,57 @@ class EncoderEmbedding(Module):
     """Compute the 2d image patch embedding ready to pass to transformer encoder."""
 
     def __init__(
-        self, input_dim: int, embed_dim: int, patch_size: int, image_size: int
+        self,
+        input_dim: int,
+        embed_dim: int,
+        patch_size: int,
+        image_size: int,
+        channel_wise: bool = False,
     ) -> None:
         """Initialize the encoder embedding module."""
         super().__init__()
 
+        self.input_dim = input_dim
+        self.channel_wise = channel_wise
+
         # logic needed in case a backbone is passed
         self.embedder = Conv2d(
-            input_dim, embed_dim, kernel_size=patch_size, stride=patch_size
+            input_dim if not channel_wise else 1,
+            embed_dim,
+            kernel_size=patch_size,
+            stride=patch_size,
         )
 
-        self.initialize_positional_embeddings(image_size, patch_size, embed_dim)
+        channels = torch.arange(input_dim).tolist() if channel_wise else []
+        self.initialize_positional_embeddings(
+            image_size, patch_size, embed_dim, channels
+        )
         self.initialize_weights()
 
     def initialize_positional_embeddings(
-        self, image_size: int, patch_size: int, embed_dim: int
+        self, image_size: int, patch_size: int, embed_dim: int, channels: list[int] = []
     ) -> None:
         """Initialize the positional embeddings."""
         self.num_patches = (image_size // patch_size) ** 2
+
         self.positional_embeddings = Parameter(
-            torch.zeros(1, self.num_patches, embed_dim), requires_grad=False
+            torch.zeros(
+                1 if not len(channels) else len(channels), self.num_patches, embed_dim
+            ),
+            requires_grad=False,
         )
         positional_embeddings = get_2d_sincos_pos_embed(
             self.positional_embeddings.shape[-1],
             int(self.num_patches**0.5),
             cls_token=False,
+            channels=channels,
         )
-        self.positional_embeddings.data.copy_(
-            torch.from_numpy(positional_embeddings).float().unsqueeze(0)
-        )
+
+        positional_embeddings_tensor = torch.from_numpy(positional_embeddings).float()
+        if len(channels) == 0:
+            positional_embeddings_tensor = positional_embeddings_tensor.unsqueeze(0)
+
+        self.positional_embeddings.data.copy_(positional_embeddings_tensor)
 
     def initialize_weights(self) -> None:
         """Initialize the weights."""
@@ -84,9 +106,14 @@ class EncoderEmbedding(Module):
         """TODO: Docstring."""
         x = self.embedder(x)
         B, C, _, _ = x.shape
-        x = x.view(B, C, -1).permute(0, 2, 1)  # BxPxH
+        x = x.view(B, C, -1).permute(0, 2, 1)  # BxCxPSxPS -> BxPxH
 
-        x += self.positional_embeddings
+        if self.channel_wise:
+            x += self.positional_embeddings.repeat_interleave(
+                B // self.input_dim, dim=0
+            )
+        else:
+            x += self.positional_embeddings
 
         return x
 
@@ -99,6 +126,7 @@ class MaskedEncoderViT(Module):
         image_size: int,
         in_channels: int,
         patch_size: int = 16,
+        channel_wise: bool = False,
         embed_dim: int = 768,
         depth: int = 12,
         num_heads: int = 12,
@@ -112,13 +140,11 @@ class MaskedEncoderViT(Module):
         self.patch_size = patch_size
 
         self.embed_module = EncoderEmbedding(
-            in_channels, embed_dim, patch_size, image_size
+            in_channels, embed_dim, patch_size, image_size, channel_wise
         )
-
         self.encoder = TransformerEncoder(
             embed_dim, depth, num_heads, dropout_rate, dropout_attn
         )
-
         self.norm = LayerNorm(embed_dim)
 
         self.apply(self._init_weights)
@@ -151,36 +177,51 @@ class DecoderEmbedding(Module):
     """TODO: Docstring."""
 
     def __init__(
-        self, num_patches: int, input_dim: int = 3, embed_dim: int = 768
+        self,
+        num_patches: int,
+        input_dim: int = 3,
+        embed_dim: int = 768,
+        in_channels: int = 3,
+        channel_wise: bool = False,
     ) -> None:
         """TODO: Docstring."""
         super().__init__()
 
         self.num_patches = num_patches
         self.embed_dim = embed_dim
+        self.channel_wise = channel_wise
+        self.in_channels = in_channels
 
         self.embedder = Linear(input_dim, embed_dim, bias=True)
 
-        self.mask_token = Parameter(torch.zeros(1, 1, embed_dim))
-        torch.nn.init.normal_(self.mask_token, std=0.02)
+        self.mask_token = Parameter(-torch.ones(1, 1, embed_dim), requires_grad=False)
 
-        self.initialize_positional_embeddings()
+        channels = torch.arange(in_channels).tolist() if channel_wise else []
+        self.initialize_positional_embeddings(embed_dim, channels)
         self.apply(self._init_weights)
 
-    def initialize_positional_embeddings(self) -> None:
+    def initialize_positional_embeddings(
+        self, embed_dim: int, channels: list[int] = []
+    ) -> None:
         """Initialize the positional embeddings."""
         self.positional_embeddings = Parameter(
-            torch.zeros(1, self.num_patches, self.embed_dim), requires_grad=False
-        )  # fixed sin-cos embedding
-
+            torch.zeros(
+                1 if not len(channels) else len(channels), self.num_patches, embed_dim
+            ),
+            requires_grad=False,
+        )
         positional_embeddings = get_2d_sincos_pos_embed(
             self.positional_embeddings.shape[-1],
             int(self.num_patches**0.5),
             cls_token=False,
+            channels=channels,
         )
-        self.positional_embeddings.data.copy_(
-            torch.from_numpy(positional_embeddings).float().unsqueeze(0)
-        )
+
+        positional_embeddings_tensor = torch.from_numpy(positional_embeddings).float()
+        if len(channels) == 0:
+            positional_embeddings_tensor = positional_embeddings_tensor.unsqueeze(0)
+
+        self.positional_embeddings.data.copy_(positional_embeddings_tensor)
 
     def _init_weights(self, m: Module) -> None:
         """Initialize the weights."""
@@ -203,7 +244,12 @@ class DecoderEmbedding(Module):
             x = self.mask_token.repeat(B, self.num_patches, 1)
             x[~mask] = x_flat
 
-        x += self.positional_embeddings
+        if self.channel_wise:
+            x += self.positional_embeddings.repeat_interleave(
+                B // self.in_channels, dim=0
+            )
+        else:
+            x += self.positional_embeddings
 
         return x, latent
 
@@ -218,6 +264,7 @@ class MaskedDecoderViT(Module):
         in_channels: int,
         out_channels: int,
         patch_size: int = 16,
+        channel_wise: bool = False,
         embed_dim: int = 768,
         depth: int = 12,
         num_heads: int = 12,
@@ -231,15 +278,18 @@ class MaskedDecoderViT(Module):
         self.in_channels = in_channels
         self.embed_dim = embed_dim
 
-        self.embed_module = DecoderEmbedding(num_patches, in_channels, embed_dim)
+        self.embed_module = DecoderEmbedding(
+            num_patches, in_channels, embed_dim, out_channels, channel_wise
+        )
 
         self.decoder = TransformerEncoder(
             embed_dim, depth, num_heads, dropout_rate, dropout_attn
         )
 
-        self.predictor = Linear(
-            embed_dim, patch_size**2 * out_channels, bias=True
-        )  # decoder to patch
+        out_features = patch_size**2
+        if not channel_wise:
+            out_features *= out_channels
+        self.predictor = Linear(embed_dim, out_features, bias=True)  # decoder to patch
 
         self.norm = LayerNorm(embed_dim)
 
@@ -275,6 +325,7 @@ class MaskedAutoencoderViT(Module):
         bands: str,
         image_size: int,
         patch_size: int = 16,
+        channel_wise: bool = False,
         embed_dim: int = 1024,
         depth: int = 24,
         num_heads: int = 16,
@@ -294,10 +345,17 @@ class MaskedAutoencoderViT(Module):
         self.image_size = image_size
         self.patch_size = patch_size
 
+        if channel_wise:
+            embed_dim //= IN_CHANNELS[sensor][bands]
+            embed_dim += embed_dim // 2
+            decoder_embed_dim //= IN_CHANNELS[sensor][bands]
+            decoder_embed_dim += decoder_embed_dim // 2
+
         self.encoder = MaskedEncoderViT(
             image_size=image_size,
-            patch_size=patch_size,
             in_channels=IN_CHANNELS[sensor][bands],
+            patch_size=patch_size,
+            channel_wise=channel_wise,
             embed_dim=embed_dim,
             depth=depth,
             num_heads=num_heads,
@@ -308,9 +366,10 @@ class MaskedAutoencoderViT(Module):
         self.decoder = MaskedDecoderViT(
             num_patches=self.encoder.embed_module.num_patches,
             image_size=image_size,
-            patch_size=patch_size,
             in_channels=embed_dim,
-            out_channels=3,  # IN_CHANNELS[sensor][bands],
+            out_channels=IN_CHANNELS[sensor][bands],
+            patch_size=patch_size,
+            channel_wise=channel_wise,
             embed_dim=decoder_embed_dim,
             depth=decoder_depth,
             num_heads=decoder_num_heads,

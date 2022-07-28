@@ -1,9 +1,8 @@
 """Common model utilities."""
 
+from typing import cast
 import numpy as np
 import numpy.typing as npt
-import torch
-from torch import Tensor
 
 
 # TODO: Attribution (Facebook)
@@ -14,7 +13,7 @@ from torch import Tensor
 # MoCo v3: https://github.com/facebookresearch/moco-v3
 # --------------------------------------------------------
 def get_2d_sincos_pos_embed(
-    embed_dim: int, grid_size: int, cls_token: bool = False
+    embed_dim: int, grid_size: int, channels: list[int] = [], cls_token: bool = False
 ) -> npt.NDArray[np.float32]:
     """Get 2D sine-cosine position embedding.
 
@@ -22,15 +21,33 @@ def get_2d_sincos_pos_embed(
     return:
     pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
     """
+
     grid_h = np.arange(grid_size, dtype=np.float32)
     grid_w = np.arange(grid_size, dtype=np.float32)
     grid = np.meshgrid(grid_w, grid_h)  # here w goes first
-    grid_array = np.stack(grid, axis=0)
 
+    grid_array = np.stack(grid, axis=0)
     grid_array = grid_array.reshape([2, 1, grid_size, grid_size])
+
+    if len(channels) != 0:
+        embed_dim -= embed_dim // 3
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid_array)
+
     if cls_token:
         pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
+
+    if len(channels) > 0:
+        channel_embed = get_1d_sincos_pos_embed_from_grid(
+            embed_dim // 2, np.array(channels)
+        )
+        channel_embed = np.expand_dims(channel_embed, axis=1)
+        channel_embed = np.repeat(channel_embed, grid_size * grid_size, axis=1)
+
+        pos_embed = np.expand_dims(pos_embed, axis=0)
+        pos_embed = pos_embed.repeat(len(channels), 0)
+
+        pos_embed = np.concatenate([pos_embed, channel_embed], axis=-1)
+
     return pos_embed
 
 
@@ -69,14 +86,5 @@ def get_1d_sincos_pos_embed_from_grid(
     emb_cos = np.cos(out)  # (M, D/2)
 
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
-    return emb
 
-
-def generate_identity_mask(x: Tensor, image_size: int, patch_size: int) -> Tensor:
-    """Generate identity mask."""
-    B, *_ = x.shape
-
-    num_patches = (image_size // patch_size) ** 2
-    mask = torch.zeros((B, num_patches), device=x.device, dtype=torch.bool)
-
-    return mask
+    return cast(npt.NDArray[np.float32], emb)
