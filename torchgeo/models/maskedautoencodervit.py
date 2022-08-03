@@ -1,8 +1,8 @@
 """MaskedVit."""
 
+from functools import lru_cache
 from typing import cast
 
-import numpy as np
 import torch
 from kornia.contrib.vit import TransformerEncoderBlock
 from torch import Tensor
@@ -82,12 +82,11 @@ class EncoderEmbedding(Module):
         positional_embeddings = get_2d_sincos_pos_embed(
             embed_dim, int(self.num_patches**0.5), cls_token=False, channels=channels
         )
-        positional_embeddings_tensor = torch.from_numpy(positional_embeddings).float()
         if not len(channels):
-            positional_embeddings_tensor = positional_embeddings_tensor.unsqueeze(0)
+            positional_embeddings = positional_embeddings.unsqueeze(0)
 
         self.positional_embeddings = Parameter(
-            positional_embeddings_tensor, requires_grad=False
+            positional_embeddings, requires_grad=False
         )
 
     def initialize_weights(self) -> None:
@@ -154,25 +153,28 @@ class MaskedEncoderViT(Module):
             init.constant_(m.bias, 0)
             init.constant_(m.weight, 1.0)
 
-    def get_channel_tokens(self, x: Tensor, channels: list[int]) -> Tensor:
+    @lru_cache(128)
+    def get_channel_tokens(
+        self,
+        channels: tuple[int],
+        batch_size: int,
+        embed_size: int,
+        device: str | torch.device,
+    ) -> Tensor:
         """TODO: Docstring."""
-        B, _, H = x.shape
-
-        channel_tokens = (
-            torch.from_numpy(get_1d_sincos_pos_embed_from_grid(H, np.array(channels)))
-            .float()
-            .to(x.device)
+        channel_tokens = get_1d_sincos_pos_embed_from_grid(
+            embed_size,
+            torch.tensor(channels, dtype=torch.float, device=device),
+            device=device,
         )
 
-        positions = np.arange(len(channels))
-        position_encodings = (
-            torch.from_numpy(get_1d_sincos_pos_embed_from_grid(H, positions))
-            .float()
-            .to(x.device)
+        positions = torch.arange(len(channels), dtype=torch.float, device=device)
+        position_encodings = get_1d_sincos_pos_embed_from_grid(
+            embed_size, positions, device=device
         )
 
         channel_tokens += position_encodings
-        channel_tokens = channel_tokens.repeat(B, 1, 1)
+        channel_tokens = channel_tokens.repeat(batch_size, 1, 1)
 
         return channel_tokens
 
@@ -187,7 +189,9 @@ class MaskedEncoderViT(Module):
             x = x[~mask].view(B, -1, H)
 
         if len(channels):
-            channel_tokens = self.get_channel_tokens(x, channels)
+            B, _, H = x.shape
+            device = x.device
+            channel_tokens = self.get_channel_tokens(tuple(channels), B, H, device)
             x = torch.cat([channel_tokens, x], dim=1)
 
         x = self.encoder(x)
@@ -235,12 +239,11 @@ class DecoderEmbedding(Module):
         positional_embeddings = get_2d_sincos_pos_embed(
             embed_dim, int(self.num_patches**0.5), cls_token=False, channels=channels
         )
-        positional_embeddings_tensor = torch.from_numpy(positional_embeddings).float()
         if not len(channels):
-            positional_embeddings_tensor = positional_embeddings_tensor.unsqueeze(0)
+            positional_embeddings = positional_embeddings.unsqueeze(0)
 
         self.positional_embeddings = Parameter(
-            positional_embeddings_tensor, requires_grad=False
+            positional_embeddings, requires_grad=False
         )
 
     def _init_weights(self, m: Module) -> None:
@@ -325,25 +328,28 @@ class MaskedDecoderViT(Module):
             init.constant_(m.bias, 0)
             init.constant_(m.weight, 1.0)
 
-    def get_channel_tokens(self, x: Tensor, channels: list[int]) -> Tensor:
+    @lru_cache(128)
+    def get_channel_tokens(
+        self,
+        channels: tuple[int],
+        batch_size: int,
+        embed_size: int,
+        device: str | torch.device,
+    ) -> Tensor:
         """TODO: Docstring."""
-        B, _, H = x.shape
-
-        channel_tokens = (
-            torch.from_numpy(get_1d_sincos_pos_embed_from_grid(H, np.array(channels)))
-            .float()
-            .to(x.device)
+        channel_tokens = get_1d_sincos_pos_embed_from_grid(
+            embed_size,
+            torch.tensor(channels, dtype=torch.float, device=device),
+            device=device,
         )
 
-        positions = np.arange(len(channels))
-        position_encodings = (
-            torch.from_numpy(get_1d_sincos_pos_embed_from_grid(H, positions))
-            .float()
-            .to(x.device)
+        positions = torch.arange(len(channels), dtype=torch.float, device=device)
+        position_encodings = get_1d_sincos_pos_embed_from_grid(
+            embed_size, positions, device=device
         )
 
         channel_tokens += position_encodings
-        channel_tokens = channel_tokens.repeat(B, 1, 1)
+        channel_tokens = channel_tokens.repeat(batch_size, 1, 1)
 
         return channel_tokens
 
@@ -354,7 +360,9 @@ class MaskedDecoderViT(Module):
         x, latent = self.embed_module(x, mask)
 
         if len(channels):
-            channel_tokens = self.get_channel_tokens(x, channels)
+            B, _, H = x.shape
+            device = x.device
+            channel_tokens = self.get_channel_tokens(tuple(channels), B, H, device)
             x = torch.cat([channel_tokens, x], dim=1)
 
         x = self.decoder(x)
