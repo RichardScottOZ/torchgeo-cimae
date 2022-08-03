@@ -135,7 +135,7 @@ class MAETask(LightningModule):
                 # "focal_mask_ratio": 0.3,
                 # "focal_mask_probability": 0.3,
                 "random_mask_ratio": 0.7,
-                "random_mask_probability": 1.0,
+                "random_mask_probability": 0.9,
             },
         )
 
@@ -218,16 +218,8 @@ class MAETask(LightningModule):
 
         with torch.no_grad():
             aug = self.augment(x, stage)
-
-            if self.channel_shuffle:
-                encoder_channels = torch.randperm(C).tolist()
-                decoder_channels = torch.randperm(C).tolist()
-
-                aug_shuffled = aug[:, encoder_channels]
-                aug = aug[:, decoder_channels]
-            else:
-                encoder_channels = decoder_channels = []
-                aug_shuffled = aug
+            encoder_channels = decoder_channels = []
+            aug_shuffled = aug
 
             num_patches = (self.crop_size // self.patch_size) ** 2
             if self.channel_wise:
@@ -239,9 +231,22 @@ class MAETask(LightningModule):
                 mask = MASKING_FUNCTIONS[masking_name](
                     aug_shuffled, mask, **self.mask_kwargs
                 )
+            mask_dec = mask
+
+            if self.channel_shuffle:
+                encoder_channels = torch.randperm(C).tolist()
+                decoder_channels = torch.randperm(C).tolist()
+
+                aug_shuffled = aug_shuffled.view(aug.shape)[:, encoder_channels].view(
+                    aug_shuffled.shape
+                )
+                mask = mask.view(B, -1, C)[..., encoder_channels].view(mask.shape)
+
+                aug = aug[:, decoder_channels]
+                mask_dec = mask.view(B, -1, C)[..., decoder_channels].view(mask.shape)
 
         pred = self.forward(aug_shuffled, mask, encoder_channels, decoder_channels)
-        loss = masked_reconstruction_loss(aug, pred, mask, self.patch_size)
+        loss = masked_reconstruction_loss(aug, pred, mask_dec, self.patch_size)
 
         self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
 
@@ -281,12 +286,14 @@ class MAETask(LightningModule):
         pred = unpatchify(pred, self.patch_size)
         masked_aug = unpatchify(masked_aug, self.patch_size)
 
-        if not self.channel_wise:
-            return {"images": torch.stack([aug[:, :3], masked_aug, pred[:, :3]])}
+        if self.channel_wise:
+            aug = aug.view(self.batch_size, -1, self.crop_size, self.crop_size)
+            masked_aug = masked_aug.view(
+                self.batch_size, -1, self.crop_size, self.crop_size
+            )
+            pred = pred.view(self.batch_size, -1, self.crop_size, self.crop_size)
 
-        aug = aug.view(self.batch_size, -1, self.crop_size, self.crop_size)
-        pred = pred.view(self.batch_size, -1, self.crop_size, self.crop_size)
-        return {"images": torch.stack([aug[:, :3], pred[:, :3]])}
+        return {"images": torch.stack([aug[:, :3], masked_aug[:, :3], pred[:, :3]])}
 
     def validation_epoch_end(
         self,
