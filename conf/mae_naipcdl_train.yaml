@@ -19,6 +19,7 @@ experiment:
     crop_size: 224
     patch_size: 16
     channel_wise: True
+    channel_shuffle: False
     embed_dim: 1024
     depth: 6
     num_heads: 1

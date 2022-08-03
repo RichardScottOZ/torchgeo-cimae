@@ -190,6 +190,8 @@ class EmbeddingEvaluator(LightningModule):
             self.num_patches = (crop_size[0] // self.patch_size) * (
                 crop_size[1] // self.patch_size
             )
+            if self.channel_wise:
+                self.num_patches *= in_channels
             out_dim = output.view(2, self.num_patches, -1).shape[-1]
 
         self.classifier = Linear(out_dim, num_classes)
@@ -269,7 +271,7 @@ class EmbeddingEvaluator(LightningModule):
         B, *_ = x.shape
 
         if self.channel_wise:
-            x = x.transpose(1, 0).flatten(0, 1).unsqueeze(1)  # Reorder per channel
+            x = x.flatten(0, 1).unsqueeze(1)  # Reorder per channel
 
         embeddings: Tensor = self.encoder(x)
         if isinstance(embeddings, Sequence):

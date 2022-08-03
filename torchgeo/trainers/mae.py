@@ -220,12 +220,13 @@ class MAETask(LightningModule):
             aug = self.augment(x, stage)
 
             if self.channel_shuffle:
-                encoder_channels = torch.randperm(C)
-                decoder_channels = torch.randperm(C)
+                encoder_channels = torch.randperm(C).tolist()
+                decoder_channels = torch.randperm(C).tolist()
 
                 aug_shuffled = aug[:, encoder_channels]
                 aug = aug[:, decoder_channels]
             else:
+                encoder_channels = decoder_channels = []
                 aug_shuffled = aug
 
             num_patches = (self.crop_size // self.patch_size) ** 2
