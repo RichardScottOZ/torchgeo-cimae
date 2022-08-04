@@ -218,32 +218,34 @@ class MAETask(LightningModule):
 
         with torch.no_grad():
             aug = self.augment(x, stage)
-            encoder_channels = decoder_channels = []
-            aug_shuffled = aug
 
             num_patches = (self.crop_size // self.patch_size) ** 2
             if self.channel_wise:
                 num_patches *= C
-                aug_shuffled = aug_shuffled.flatten(0, 1).unsqueeze(1)
 
             mask = torch.zeros((B, num_patches), device=aug.device, dtype=torch.bool)
             for masking_name in self.mask_fn:
                 mask = MASKING_FUNCTIONS[masking_name](
-                    aug_shuffled, mask, **self.mask_kwargs
+                    mask, device=aug.device, **self.mask_kwargs
                 )
+
+            aug_shuffled = aug
+            encoder_channels = decoder_channels = []
             mask_dec = mask
 
             if self.channel_shuffle:
                 encoder_channels = torch.randperm(C).tolist()
                 decoder_channels = torch.randperm(C).tolist()
 
-                aug_shuffled = aug_shuffled.view(aug.shape)[:, encoder_channels].view(
-                    aug_shuffled.shape
-                )
+                aug_shuffled = aug_shuffled[:, encoder_channels]
                 mask = mask.view(B, -1, C)[..., encoder_channels].view(mask.shape)
 
                 aug = aug[:, decoder_channels]
                 mask_dec = mask.view(B, -1, C)[..., decoder_channels].view(mask.shape)
+
+            if self.channel_wise:
+                aug = aug.flatten(0, 1).unsqueeze(1)
+                aug_shuffled = aug_shuffled.flatten(0, 1).unsqueeze(1)
 
         pred = self.forward(aug_shuffled, mask, encoder_channels, decoder_channels)
         loss = masked_reconstruction_loss(aug, pred, mask_dec, self.patch_size)
@@ -293,7 +295,7 @@ class MAETask(LightningModule):
             )
             pred = pred.view(self.batch_size, -1, self.crop_size, self.crop_size)
 
-        return {"images": torch.stack([aug[:, :3], masked_aug[:, :3], pred[:, :3]])}
+        return {"images": torch.stack([aug, masked_aug, pred])}
 
     def validation_epoch_end(
         self,

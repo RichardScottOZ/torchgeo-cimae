@@ -196,8 +196,8 @@ def unpatchify(x: Tensor, patch_size: int, flat: bool = False) -> Tensor:
 
 
 def random_masking(
-    x: Tensor,
     mask: Tensor,
+    device: str | torch.device,
     random_mask_ratio: float,
     random_mask_probability: float,
     **kwargs: Any,
@@ -217,7 +217,7 @@ def random_masking(
     len_remove = max(int(P * random_mask_ratio) - num_removed, 0)
 
     ids_kept = (~mask).flatten().argwhere().view(B, num_kept)
-    noise = torch.rand(B, num_kept, device=x.device)
+    noise = torch.rand(B, num_kept, device=device)
     ids_shuffle = torch.argsort(noise, dim=1)
     ids_remove = ids_kept.gather(dim=1, index=ids_shuffle[:, :len_remove]).flatten()
 
@@ -227,8 +227,8 @@ def random_masking(
 
 
 def focal_masking(
-    x: Tensor,
     mask: Tensor,
+    device: str | torch.device,
     focal_mask_ratio: float,
     focal_mask_probability: float,
     **kwargs: Any,

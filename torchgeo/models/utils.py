@@ -22,7 +22,6 @@ def get_2d_sincos_pos_embed(
     device: str | torch.device = "cpu",
 ) -> torch.Tensor:
     """Get 2D sine-cosine position embedding.
-
     grid_size: int of the grid height and width
     return:
     pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
@@ -43,7 +42,8 @@ def get_2d_sincos_pos_embed(
 
     if cls_token:
         pos_embed = torch.cat(
-            [torch.zeros([1, embed_dim], device=device), pos_embed], dim=0
+            [torch.zeros([1, embed_dim], dtype=torch.float, device=device), pos_embed],
+            dim=0,
         )
 
     if len(channels) > 0:
