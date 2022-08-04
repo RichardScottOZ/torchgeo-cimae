@@ -1,9 +1,7 @@
 """Common model utilities."""
 
-from typing import cast
+from typing import Sequence
 
-import numpy as np
-import numpy.typing as npt
 import torch
 
 
@@ -17,7 +15,7 @@ import torch
 def get_2d_sincos_pos_embed(
     embed_dim: int,
     grid_size: int,
-    channels: list[int] = [],
+    channels: Sequence[int] = [],
     cls_token: bool = False,
     device: str | torch.device = "cpu",
 ) -> torch.Tensor:
