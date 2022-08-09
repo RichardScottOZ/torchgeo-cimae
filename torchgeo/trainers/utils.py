@@ -197,7 +197,6 @@ def unpatchify(x: Tensor, patch_size: int, flat: bool = False) -> Tensor:
 
 def random_masking(
     mask: Tensor,
-    device: str | torch.device,
     random_mask_ratio: float,
     random_mask_probability: float,
     **kwargs: Any,
@@ -217,7 +216,7 @@ def random_masking(
     len_remove = max(int(P * random_mask_ratio) - num_removed, 0)
 
     ids_kept = (~mask).flatten().argwhere().view(B, num_kept)
-    noise = torch.rand(B, num_kept, device=device)
+    noise = torch.rand(B, num_kept, device=mask.device)
     ids_shuffle = torch.argsort(noise, dim=1)
     ids_remove = ids_kept.gather(dim=1, index=ids_shuffle[:, :len_remove]).flatten()
 
@@ -228,18 +227,27 @@ def random_masking(
 
 def focal_masking(
     mask: Tensor,
-    device: str | torch.device,
     focal_mask_ratio: float,
     focal_mask_probability: float,
+    num_patches: int | None = None,
     **kwargs: Any,
 ) -> Tensor:
     """Perform focal masking."""
+    if num_patches is not None:
+        masks = []
+        for mask_split in mask.split(num_patches, dim=1):  # type: ignore
+            mask_split_focal = focal_masking(
+                mask_split, focal_mask_ratio, focal_mask_probability
+            )
+            masks.append(mask_split_focal)
+
+        return torch.cat(masks, dim=1)
+
     if torch.rand(1) > focal_mask_probability:
         return mask
 
     B, P = mask.shape
     focal_ratio = 1 - focal_mask_ratio
-
     side = int(P**0.5)
 
     # Generate focal mask

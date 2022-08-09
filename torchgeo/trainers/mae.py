@@ -128,14 +128,17 @@ class MAETask(LightningModule):
             decoder_dropout_attn=self.hyperparams.get("decoder_dropout_attn", 0.0),
         )
 
-        self.mask_fn = self.hyperparams.get("mask_fn", ["random_masking"])
+        self.mask_fn = self.hyperparams.get(
+            "mask_fn", ["focal_masking", "random_masking"]
+        )
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
-                # "focal_mask_ratio": 0.3,
-                # "focal_mask_probability": 0.3,
+                "focal_mask_ratio": 0.3,
+                "focal_mask_probability": 0.3,
+                "num_patches": (self.crop_size // self.patch_size) ** 2,
                 "random_mask_ratio": 0.7,
-                "random_mask_probability": 0.9,
+                "random_mask_probability": 1.0,
             },
         )
 
@@ -225,27 +228,25 @@ class MAETask(LightningModule):
 
             mask = torch.zeros((B, num_patches), device=aug.device, dtype=torch.bool)
             for masking_name in self.mask_fn:
-                mask = MASKING_FUNCTIONS[masking_name](
-                    mask, device=aug.device, **self.mask_kwargs
-                )
+                mask = MASKING_FUNCTIONS[masking_name](mask, **self.mask_kwargs)
 
             aug_shuffled = aug
             encoder_channels = decoder_channels = []
             mask_dec = mask
 
             if self.channel_shuffle:
-                encoder_channels = torch.randperm(C).tolist()
+                encoder_channels = [0, 1, 2, 3]  # torch.randperm(C).tolist()
                 decoder_channels = torch.randperm(C).tolist()
 
                 aug_shuffled = aug_shuffled[:, encoder_channels]
-                mask = mask.view(B, -1, C)[..., encoder_channels].view(mask.shape)
-
-                aug = aug[:, decoder_channels]
                 mask_dec = mask.view(B, -1, C)[..., decoder_channels].view(mask.shape)
 
+                aug = aug[:, decoder_channels]
+                mask = mask.view(B, -1, C)[..., encoder_channels].view(mask.shape)
+
             if self.channel_wise:
-                aug = aug.flatten(0, 1).unsqueeze(1)
                 aug_shuffled = aug_shuffled.flatten(0, 1).unsqueeze(1)
+                aug = aug.flatten(0, 1).unsqueeze(1)
 
         pred = self.forward(aug_shuffled, mask, encoder_channels, decoder_channels)
         loss = masked_reconstruction_loss(aug, pred, mask_dec, self.patch_size)
