@@ -169,21 +169,51 @@ class MaskedEncoderViT(Module):
             device=device,
         )
 
-        positions = torch.arange(len(channels), dtype=torch.float, device=device)
-        position_encodings = get_1d_sincos_pos_embed_from_grid(
-            embed_size, positions, device=device
-        )
-
-        channel_tokens += position_encodings
         channel_tokens = channel_tokens.repeat(batch_size, 1, 1)
 
         return channel_tokens
 
     def add_channel_encoding(self, x: Tensor, channels: list[int]) -> Tensor:
         """TODO: Docstring."""
-        B, _, H = x.shape
+        B, PS, H = x.shape
         device = x.device
         channel_tokens = self.get_channel_tokens(tuple(channels), B, H, device)
+        x += channel_tokens.repeat_interleave(PS // len(channels), dim=1)
+
+        return x
+
+    @lru_cache(128)
+    def get_channel_tokens_with_position(
+        self,
+        channels: tuple[int],
+        batch_size: int,
+        embed_size: int,
+        device: str | torch.device,
+    ) -> Tensor:
+        """TODO: Docstring."""
+        channel_tokens = get_1d_sincos_pos_embed_from_grid(
+            embed_size // 2,
+            torch.tensor(channels, dtype=torch.float, device=device),
+            device=device,
+        )
+
+        positions = torch.arange(len(channels), dtype=torch.float, device=device)
+        position_encodings = get_1d_sincos_pos_embed_from_grid(
+            embed_size // 2, positions, device=device
+        )
+
+        channel_tokens = torch.cat([channel_tokens, position_encodings], dim=1)
+        channel_tokens = channel_tokens.repeat(batch_size, 1, 1)
+
+        return channel_tokens
+
+    def cat_channel_encoding(self, x: Tensor, channels: list[int]) -> Tensor:
+        """TODO: Docstring."""
+        B, _, H = x.shape
+        device = x.device
+        channel_tokens = self.get_channel_tokens_with_position(
+            tuple(channels), B, H, device
+        )
         x = torch.cat([channel_tokens, x], dim=1)
 
         return x
@@ -194,19 +224,24 @@ class MaskedEncoderViT(Module):
         """Forward pass of the model."""
         x = self.embed_module(x)
 
+        # TODO: Remove
+        channels = []
+
         if mask is not None:
             B, _, H = x.shape
             x = x[~mask].view(B, -1, H)
 
         if len(channels):
+            # x = self.cat_channel_encoding(x, channels)
             x = self.add_channel_encoding(x, channels)
 
         x = self.encoder(x)
-        x = self.norm(x)
 
         # Remove channel tokens
-        if len(channels):
-            x = x[:, len(channels) :]
+        # if len(channels):
+        #     x = x[:, len(channels) :]
+
+        x = self.norm(x)
 
         return x
 
@@ -246,9 +281,7 @@ class DecoderEmbedding(Module):
             cls_token=False,
             channels=self.channels,
         )
-
-        positional_embeddings = positional_embeddings.transpose(1, 0).flatten(0, 1)
-        positional_embeddings = positional_embeddings.unsqueeze(0)
+        positional_embeddings = positional_embeddings.flatten(0, 1).unsqueeze(0)
 
         self.positional_embeddings = Parameter(
             positional_embeddings, requires_grad=False
@@ -277,10 +310,7 @@ class DecoderEmbedding(Module):
             x = self.mask_token.repeat(B, self.num_patches, 1)
             x[~mask] = x_flat
 
-        if self.channel_wise:
-            x += self.positional_embeddings
-        else:
-            x += self.positional_embeddings
+        x += self.positional_embeddings
 
         return x, latent
 
@@ -351,21 +381,51 @@ class MaskedDecoderViT(Module):
             device=device,
         )
 
-        positions = torch.arange(len(channels), dtype=torch.float, device=device)
-        position_encodings = get_1d_sincos_pos_embed_from_grid(
-            embed_size, positions, device=device
-        )
-
-        channel_tokens += position_encodings
         channel_tokens = channel_tokens.repeat(batch_size, 1, 1)
 
         return channel_tokens
 
     def add_channel_encoding(self, x: Tensor, channels: list[int]) -> Tensor:
         """TODO: Docstring."""
-        B, _, H = x.shape
+        B, PS, H = x.shape
         device = x.device
         channel_tokens = self.get_channel_tokens(tuple(channels), B, H, device)
+        x += channel_tokens.repeat_interleave(PS // len(channels), dim=1)
+
+        return x
+
+    @lru_cache(128)
+    def get_channel_tokens_with_position(
+        self,
+        channels: tuple[int],
+        batch_size: int,
+        embed_size: int,
+        device: str | torch.device,
+    ) -> Tensor:
+        """TODO: Docstring."""
+        channel_tokens = get_1d_sincos_pos_embed_from_grid(
+            embed_size // 2,
+            torch.tensor(channels, dtype=torch.float, device=device),
+            device=device,
+        )
+
+        positions = torch.arange(len(channels), dtype=torch.float, device=device)
+        position_encodings = get_1d_sincos_pos_embed_from_grid(
+            embed_size // 2, positions, device=device
+        )
+
+        channel_tokens = torch.cat([channel_tokens, position_encodings], dim=1)
+        channel_tokens = channel_tokens.repeat(batch_size, 1, 1)
+
+        return channel_tokens
+
+    def cat_channel_encoding(self, x: Tensor, channels: list[int]) -> Tensor:
+        """TODO: Docstring."""
+        B, _, H = x.shape
+        device = x.device
+        channel_tokens = self.get_channel_tokens_with_position(
+            tuple(channels), B, H, device
+        )
         x = torch.cat([channel_tokens, x], dim=1)
 
         return x
@@ -377,14 +437,16 @@ class MaskedDecoderViT(Module):
         x, latent = self.embed_module(x, mask, channels)
 
         if len(channels):
+            # x = self.cat_channel_encoding(x, channels)
             x = self.add_channel_encoding(x, channels)
 
         x = self.decoder(x)
+
+        # Remove channel tokens
+        # if len(channels):
+        #     x = x[:, len(channels) :]
+
         x = self.norm(x)
-
-        if len(channels):
-            x = x[:, len(channels) :]
-
         x = self.predictor(x)
 
         return x, latent
@@ -420,8 +482,8 @@ class MaskedAutoencoderViT(Module):
         self.patch_size = patch_size
 
         if channel_wise:
-            embed_dim = (embed_dim // 3 // 2) * 2 * 3
-            decoder_embed_dim = (decoder_embed_dim // 3 // 2) * 2 * 3
+            embed_dim = (embed_dim // 3 // 2 // 2) * 3 * 2 * 2
+            decoder_embed_dim = (decoder_embed_dim // 3 // 2 // 2) * 3 * 2 * 2
 
         self.encoder = MaskedEncoderViT(
             image_size=image_size,

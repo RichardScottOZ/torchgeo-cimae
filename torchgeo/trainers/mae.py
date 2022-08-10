@@ -134,7 +134,7 @@ class MAETask(LightningModule):
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
-                "focal_mask_ratio": 0.3,
+                "focal_mask_ratio": 0.0,
                 "focal_mask_probability": 0.3,
                 "num_patches": (self.crop_size // self.patch_size) ** 2,
                 "random_mask_ratio": 0.7,
@@ -235,14 +235,14 @@ class MAETask(LightningModule):
             mask_dec = mask
 
             if self.channel_shuffle:
-                encoder_channels = [0, 1, 2, 3]  # torch.randperm(C).tolist()
+                encoder_channels = torch.randperm(C).tolist()  # [0, 1, 2, 3]
                 decoder_channels = torch.randperm(C).tolist()
 
                 aug_shuffled = aug_shuffled[:, encoder_channels]
-                mask_dec = mask.view(B, -1, C)[..., decoder_channels].view(mask.shape)
-
                 aug = aug[:, decoder_channels]
-                mask = mask.view(B, -1, C)[..., encoder_channels].view(mask.shape)
+
+                mask_dec = mask.view(B, C, -1)[:, decoder_channels].view(mask.shape)
+                mask = mask.view(B, C, -1)[:, encoder_channels].view(mask.shape)
 
             if self.channel_wise:
                 aug_shuffled = aug_shuffled.flatten(0, 1).unsqueeze(1)
