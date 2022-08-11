@@ -226,7 +226,7 @@ class MAETask(LightningModule):
             if self.channel_wise:
                 num_patches *= C
 
-            mask = torch.zeros((B, num_patches), device=aug.device, dtype=torch.bool)
+            mask = torch.zeros(num_patches, device=aug.device, dtype=torch.bool)
             for masking_name in self.mask_fn:
                 mask = MASKING_FUNCTIONS[masking_name](mask, **self.mask_kwargs)
 
@@ -241,8 +241,8 @@ class MAETask(LightningModule):
                 aug_shuffled = aug_shuffled[:, encoder_channels]
                 aug = aug[:, decoder_channels]
 
-                mask_dec = mask.view(B, C, -1)[:, decoder_channels].view(mask.shape)
-                mask = mask.view(B, C, -1)[:, encoder_channels].view(mask.shape)
+                mask_dec = mask.view(C, -1)[decoder_channels].flatten()
+                mask = mask.view(C, -1)[encoder_channels].flatten()
 
             if self.channel_wise:
                 aug_shuffled = aug_shuffled.flatten(0, 1).unsqueeze(1)
@@ -254,8 +254,8 @@ class MAETask(LightningModule):
         self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
 
         if self.channel_wise:
-            pred = pred.view(B * C, num_patches // C, -1)
-            mask = mask.view(B * C, -1)
+            pred = pred.view(B * self.num_channels, num_patches // C, -1)
+            mask = mask.view(self.num_channels, -1).repeat(B, 1)
 
         return loss, aug, aug_shuffled, pred, mask
 

@@ -209,16 +209,16 @@ def random_masking(
     if torch.rand(1) > random_mask_probability:
         return mask
 
-    B, P = mask.shape
+    P = len(mask)
 
-    num_removed = mask[0].sum()
+    num_removed = mask.sum()
     num_kept = P - num_removed
     len_remove = max(int(P * random_mask_ratio) - num_removed, 0)
 
-    ids_kept = (~mask).flatten().argwhere().view(B, num_kept)
-    noise = torch.rand(B, num_kept, device=mask.device)
-    ids_shuffle = torch.argsort(noise, dim=1)
-    ids_remove = ids_kept.gather(dim=1, index=ids_shuffle[:, :len_remove]).flatten()
+    ids_kept = (~mask).flatten().argwhere().view(num_kept)
+    noise = torch.rand(num_kept, device=mask.device)
+    ids_shuffle = torch.argsort(noise, dim=0)
+    ids_remove = ids_kept.gather(dim=0, index=ids_shuffle[:len_remove]).flatten()
 
     mask.flatten()[ids_remove] = True
 

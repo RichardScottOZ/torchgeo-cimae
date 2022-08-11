@@ -229,7 +229,7 @@ class MaskedEncoderViT(Module):
 
         if mask is not None:
             B, _, H = x.shape
-            x = x[~mask].view(B, -1, H)
+            x = x[:, ~mask]
 
         if len(channels):
             # x = self.cat_channel_encoding(x, channels)
@@ -306,9 +306,9 @@ class DecoderEmbedding(Module):
         B, _, _ = x.shape
 
         if mask is not None:
-            x_flat = x.flatten(0, 1)
+            x_data = x
             x = self.mask_token.repeat(B, self.num_patches, 1)
-            x[~mask] = x_flat
+            x[:, ~mask] = x_data
 
         x += self.positional_embeddings
 
