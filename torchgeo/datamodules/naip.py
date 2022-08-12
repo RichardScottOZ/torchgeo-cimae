@@ -209,6 +209,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         cache_size: int = 128,
         pin_memory: bool = False,
         block_size: int = 256,
+        prefetch_factor: int = 50,
         **kwargs: Any,
     ) -> None:
         """Initialize a LightningDataModule for NAIP and Chesapeake based DataLoaders.
@@ -247,6 +248,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         self.cache = cache
         self.cache_size = cache_size
         self.block_size = block_size
+        self.prefetch_factor = prefetch_factor
         self.kwargs = kwargs
 
     def naip_transform(self, sample: Dict[str, Any]) -> Dict[str, Any]:
@@ -370,6 +372,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
                 collate_fn=self.train_collate_fn,
                 pin_memory=self.pin_memory,
                 drop_last=True,
+                prefetch_factor=self.prefetch_factor,
             )
 
         return DataLoader(
@@ -378,6 +381,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=self.train_collate_fn,
             pin_memory=self.pin_memory,
+            prefetch_factor=self.prefetch_factor,
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
@@ -395,6 +399,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
                 collate_fn=self.val_collate_fn,
                 pin_memory=self.pin_memory,
                 drop_last=True,
+                prefetch_factor=self.prefetch_factor,
             )
 
         return DataLoader(
@@ -403,6 +408,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=self.val_collate_fn,
             pin_memory=self.pin_memory,
+            prefetch_factor=self.prefetch_factor,
         )
 
     def test_dataloader(self) -> DataLoader[Any]:
@@ -419,6 +425,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
                 num_workers=self.num_workers,
                 collate_fn=self.test_collate_fn,
                 pin_memory=self.pin_memory,
+                prefetch_factor=self.prefetch_factor,
             )
 
         return DataLoader(
@@ -427,4 +434,5 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             collate_fn=self.test_collate_fn,
             pin_memory=self.pin_memory,
+            prefetch_factor=self.prefetch_factor,
         )
