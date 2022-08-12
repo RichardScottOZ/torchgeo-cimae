@@ -210,7 +210,6 @@ def random_masking(
         return mask
 
     P = len(mask)
-
     num_removed = mask.sum()
     num_kept = P - num_removed
     len_remove = max(int(P * random_mask_ratio) - num_removed, 0)
@@ -226,7 +225,7 @@ def random_masking(
 
 
 def focal_masking(
-    mask: Tensor,
+    masks: Tensor,
     focal_mask_ratio: float,
     focal_mask_probability: float,
     num_patches: int | None = None,

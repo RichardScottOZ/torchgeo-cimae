@@ -32,6 +32,8 @@ def masked_reconstruction_loss(
     target: Tensor, pred: Tensor, mask: Tensor, patch_size: int
 ) -> Tensor:
     """Compute masked reconstruction loss."""
+    B, *_ = pred.shape
+
     target = patchify(target, patch_size)
     target = target.view(pred.shape)
 
@@ -42,7 +44,7 @@ def masked_reconstruction_loss(
     if num_hidden == 0:
         return cast(Tensor, loss.mean())
 
-    loss = (loss * mask).sum() / num_hidden  # mean loss on removed patches
+    loss = (loss * mask).sum() / (B * num_hidden)  # mean loss on removed patches
 
     return cast(Tensor, loss)
 
@@ -129,13 +131,13 @@ class MAETask(LightningModule):
         )
 
         self.mask_fn = self.hyperparams.get(
-            "mask_fn", ["focal_masking", "random_masking"]
+            "mask_fn", ["random_masking"]  # ["focal_masking", "random_masking"]
         )
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
-                "focal_mask_ratio": 0.0,
-                "focal_mask_probability": 0.3,
+                "focal_mask_ratio": 0.3,
+                "focal_mask_probability": 0.0,
                 "num_patches": (self.crop_size // self.patch_size) ** 2,
                 "random_mask_ratio": 0.7,
                 "random_mask_probability": 1.0,
@@ -217,26 +219,22 @@ class MAETask(LightningModule):
         """TODO: Docstring."""
         batch = args[0]
         x = batch["image"]
+
         B, C, *_ = x.shape
+        self.C = C if not self.channel_shuffle else 3
+        num_patches = (self.crop_size // self.patch_size) ** 2
 
         with torch.no_grad():
             aug = self.augment(x, stage)
+            mask = self.generate_mask(C, num_patches, x.device)
 
-            num_patches = (self.crop_size // self.patch_size) ** 2
-            if self.channel_wise:
-                num_patches *= C
-
-            mask = torch.zeros(num_patches, device=aug.device, dtype=torch.bool)
-            for masking_name in self.mask_fn:
-                mask = MASKING_FUNCTIONS[masking_name](mask, **self.mask_kwargs)
-
-            aug_shuffled = aug
-            encoder_channels = decoder_channels = []
+            aug_shuffled = aug.clone()
             mask_dec = mask
+            encoder_channels = decoder_channels = []
 
             if self.channel_shuffle:
-                encoder_channels = torch.randperm(C).tolist()  # [0, 1, 2, 3]
-                decoder_channels = torch.randperm(C).tolist()
+                encoder_channels = torch.randperm(C).tolist()[: self.C]
+                decoder_channels = torch.randperm(C).tolist()[: self.C]
 
                 aug_shuffled = aug_shuffled[:, encoder_channels]
                 aug = aug[:, decoder_channels]
@@ -254,10 +252,24 @@ class MAETask(LightningModule):
         self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
 
         if self.channel_wise:
-            pred = pred.view(B * self.num_channels, num_patches // C, -1)
-            mask = mask.view(self.num_channels, -1).repeat(B, 1)
+            pred = pred.view(B * self.C, num_patches // C, -1)
+            mask = mask.view(self.C, -1).repeat(B, 1)
 
         return loss, aug, aug_shuffled, pred, mask
+
+    def generate_mask(
+        self, C: int, num_patches: int, device: torch.device | str
+    ) -> Tensor:
+        """Generate a mask of the image."""
+        mask = torch.zeros(
+            num_patches if not self.channel_wise else num_patches * C,
+            device=device,
+            dtype=torch.bool,
+        )
+        for masking_name in self.mask_fn:
+            mask = MASKING_FUNCTIONS[masking_name](mask, **self.mask_kwargs)
+
+        return mask
 
     def training_step(self, *args: Any, **kwargs: Any) -> Tensor:
         """Compute and return the training loss.
@@ -291,12 +303,15 @@ class MAETask(LightningModule):
 
         if self.channel_wise:
             aug = aug.view(self.batch_size, -1, self.crop_size, self.crop_size)
+            aug_shuffled = aug_shuffled.view(
+                self.batch_size, -1, self.crop_size, self.crop_size
+            )
             masked_aug = masked_aug.view(
                 self.batch_size, -1, self.crop_size, self.crop_size
             )
             pred = pred.view(self.batch_size, -1, self.crop_size, self.crop_size)
 
-        return {"images": torch.stack([aug, masked_aug, pred])}
+        return {"images": torch.stack([aug_shuffled, masked_aug, aug, pred])}
 
     def validation_epoch_end(
         self,
@@ -306,10 +321,15 @@ class MAETask(LightningModule):
         """Log images."""
         images = validation_step_outputs[0]["images"]  # type: ignore
 
-        grid = make_grid(images[:, :8].flatten(0, 1)[:, :3])
-        images = wandb.Image(grid, caption="Images")
+        if True:  #  self.channel_wise:
+            grid = make_grid(images[:, :8].flatten(0, 1)[:, :3])
+        else:
+            grid = make_grid(
+                images[:, :3].flatten(0, 1)[:, :3].flatten(0, 1).unsqueeze(1), nrow=9
+            )
+        images_grid = wandb.Image(grid, caption="Images")
 
-        wandb.log({"Images": images})
+        wandb.log({"Images": images_grid})
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """No-op, does nothing."""
