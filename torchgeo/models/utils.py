@@ -15,7 +15,6 @@ import torch
 def get_2d_sincos_pos_embed(
     embed_dim: int,
     grid_size: int,
-    channels: Sequence[int] = [],
     cls_token: bool = False,
     device: str | torch.device = "cpu",
 ) -> torch.Tensor:
@@ -32,10 +31,6 @@ def get_2d_sincos_pos_embed(
     grid_array = torch.stack(grid, dim=0)
     grid_array = grid_array.reshape([2, 1, grid_size, grid_size])
 
-    if len(channels) > 0:
-        channel_embed_dim = embed_dim // 3
-        embed_dim = embed_dim // 3 * 2
-
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid_array, device)
 
     if cls_token:
@@ -43,18 +38,6 @@ def get_2d_sincos_pos_embed(
             [torch.zeros([1, embed_dim], dtype=torch.float, device=device), pos_embed],
             dim=0,
         )
-
-    if len(channels) > 0:
-        channel_embed = get_1d_sincos_pos_embed_from_grid(
-            channel_embed_dim, torch.tensor(channels, device=device), device
-        )
-        channel_embed = channel_embed.unsqueeze(1)
-        channel_embed = channel_embed.repeat(1, grid_size * grid_size, 1)
-
-        pos_embed = pos_embed.unsqueeze(0)
-        pos_embed = pos_embed.repeat(len(channels), 1, 1)
-
-        pos_embed = torch.cat([pos_embed, channel_embed], dim=-1)
 
     return pos_embed
 

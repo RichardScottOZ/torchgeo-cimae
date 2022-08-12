@@ -233,8 +233,8 @@ class MAETask(LightningModule):
             encoder_channels = decoder_channels = []
 
             if self.channel_shuffle:
-                encoder_channels = torch.randperm(C).tolist()[: self.C]
-                decoder_channels = torch.randperm(C).tolist()[: self.C]
+                encoder_channels = torch.randperm(C, device=x.device).tolist()[: self.C]
+                decoder_channels = torch.randperm(C, device=x.device).tolist()[: self.C]
 
                 aug_shuffled = aug_shuffled[:, encoder_channels]
                 aug = aug[:, decoder_channels]
@@ -243,6 +243,11 @@ class MAETask(LightningModule):
                 mask = mask.view(C, -1)[encoder_channels].flatten()
 
             if self.channel_wise:
+                if not self.channel_shuffle:
+                    encoder_channels = decoder_channels = torch.arange(
+                        self.C, device=x.device
+                    ).tolist()
+
                 aug_shuffled = aug_shuffled.flatten(0, 1).unsqueeze(1)
                 aug = aug.flatten(0, 1).unsqueeze(1)
 
@@ -252,7 +257,7 @@ class MAETask(LightningModule):
         self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
 
         if self.channel_wise:
-            pred = pred.view(B * self.C, num_patches // C, -1)
+            pred = pred.view(B * self.C, num_patches, -1)
             mask = mask.view(self.C, -1).repeat(B, 1)
 
         return loss, aug, aug_shuffled, pred, mask
