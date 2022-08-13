@@ -15,6 +15,17 @@ IN_CHANNELS = {"sentinel2": {"all": 10}, "naip": {"all": 4}}
 NUM_CLASSES = {"sentinel2": 17, "naip": 0}
 
 
+def _init_weights(m: Module) -> None:
+    """Initialize the weights."""
+    if isinstance(m, Linear):
+        init.xavier_uniform_(m.weight)
+        if isinstance(m, Linear) and m.bias is not None:
+            init.constant_(m.bias, 0)
+    elif isinstance(m, LayerNorm):
+        init.constant_(m.bias, 0)
+        init.constant_(m.weight, 1.0)
+
+
 class TransformerEncoder(Module):
     """TransformerEncoder."""
 
@@ -118,7 +129,7 @@ class EncoderEmbedding(Module):
         x += self.positional_embeddings
 
         if len(channels):
-            x = x.reshape(-1, self.input_dim * PW**2, H)
+            x = x.reshape(-1, len(channels) * PW**2, H)
             x += self.get_channel_encodings(tuple(channels), x.shape[-1], x.device)
 
         return x
@@ -154,17 +165,7 @@ class MaskedEncoderViT(Module):
         )
         self.norm = LayerNorm(embed_dim)
 
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m: Module) -> None:
-        """Initialize the weights."""
-        if isinstance(m, Linear):
-            torch.nn.init.xavier_uniform_(m.weight)
-            if isinstance(m, Linear) and m.bias is not None:
-                init.constant_(m.bias, 0)
-        elif isinstance(m, LayerNorm):
-            init.constant_(m.bias, 0)
-            init.constant_(m.weight, 1.0)
+        self.apply(_init_weights)
 
     def forward(
         self, x: Tensor, mask: Tensor | None = None, channels: list[int] = []
@@ -207,7 +208,7 @@ class DecoderEmbedding(Module):
         )
 
         self.initialize_positional_encodings()
-        self.apply(self._init_weights)
+        self.apply(_init_weights)
 
     def initialize_positional_encodings(self) -> None:
         """Initialize the positional embeddings."""
@@ -218,16 +219,6 @@ class DecoderEmbedding(Module):
         self.positional_embeddings = Parameter(
             positional_embeddings, requires_grad=False
         )
-
-    def _init_weights(self, m: Module) -> None:
-        """Initialize the weights."""
-        if isinstance(m, Linear):
-            init.xavier_uniform_(m.weight)
-            if isinstance(m, Linear) and m.bias is not None:
-                init.constant_(m.bias, 0)
-        elif isinstance(m, LayerNorm):
-            init.constant_(m.bias, 0)
-            init.constant_(m.weight, 1.0)
 
     @lru_cache(128)
     def get_channel_encodings(
@@ -307,17 +298,7 @@ class MaskedDecoderViT(Module):
             out_features *= out_channels
         self.predictor = Linear(embed_dim, out_features, bias=True)  # decoder to patch
 
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m: Module) -> None:
-        """Initialize the weights."""
-        if isinstance(m, Linear):
-            init.xavier_uniform_(m.weight)
-            if isinstance(m, Linear) and m.bias is not None:
-                init.constant_(m.bias, 0)
-        elif isinstance(m, LayerNorm):
-            init.constant_(m.bias, 0)
-            init.constant_(m.weight, 1.0)
+        self.apply(_init_weights)
 
     def forward(
         self, x: Tensor, mask: Tensor | None = None, channels: list[int] = []
@@ -366,7 +347,7 @@ class MaskedAutoencoderViT(Module):
 
         self.encoder = MaskedEncoderViT(
             image_size=image_size,
-            in_channels=3,  # IN_CHANNELS[sensor][bands],
+            in_channels=4,  # IN_CHANNELS[sensor][bands],
             patch_size=patch_size,
             channel_wise=channel_wise,
             embed_dim=embed_dim,
