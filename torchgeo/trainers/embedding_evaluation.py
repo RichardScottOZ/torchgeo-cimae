@@ -170,9 +170,9 @@ class EmbeddingEvaluator(LightningModule):
         image_size = _to_tuple(image_size)
         crop_size = _to_tuple(crop_size)
 
-        in_channels = self.hyperparams.get("in_channels", 4)
+        self.in_channels = self.hyperparams.get("in_channels", 4)
         output = self.get_embeddings(
-            torch.zeros((2, in_channels, crop_size[0], crop_size[1]))
+            torch.zeros((2, self.in_channels, crop_size[0], crop_size[1]))
         )
         if isinstance(output, Sequence):
             output = output[0]
@@ -190,11 +190,12 @@ class EmbeddingEvaluator(LightningModule):
             self.num_patches = (crop_size[0] // self.patch_size) * (
                 crop_size[1] // self.patch_size
             )
-            if self.channel_wise:
-                self.num_patches *= in_channels
-            out_dim = output.view(2, self.num_patches, -1).shape[-1]
+            out_dim = output.view(2, self.num_patches * self.in_channels, -1).shape[-1]
 
-        self.classifier = Linear(out_dim, num_classes)
+        self.classifier = Linear(
+            out_dim if not self.channel_wise else out_dim * self.in_channels,
+            num_classes,
+        )
         self.classifier.weight.data.normal_(mean=0.0, std=0.01)
         self.classifier.bias.data.zero_()
 
@@ -273,7 +274,7 @@ class EmbeddingEvaluator(LightningModule):
         if self.channel_wise:
             x = x.flatten(0, 1).unsqueeze(1)  # Reorder per channel
 
-        embeddings: Tensor = self.encoder(x)
+        embeddings: Tensor = self.encoder(x, channels=[0, 1, 2, 3])
         if isinstance(embeddings, Sequence):
             embeddings = embeddings[0]
         embeddings = embeddings.reshape(B, -1)
@@ -283,14 +284,23 @@ class EmbeddingEvaluator(LightningModule):
 
         return embeddings.squeeze()
 
-    def classify(self, aug: Tensor, embeddings: Tensor) -> Tensor:
+    def classify(self, embeddings: Tensor) -> Tensor:
         """Classify the input tensor."""
         if not self.mean_patches:
             y_hat = self.classifier(embeddings)
             return cast(Tensor, y_hat)
 
         B, *_ = embeddings.shape
-        embeddings = embeddings.view(B, self.num_patches, -1)
+
+        if not self.channel_wise:
+            embeddings = embeddings.view(B, self.num_patches, -1)
+        else:
+            embeddings = (
+                embeddings.view(B, self.in_channels, self.num_patches, -1)
+                .transpose(1, 2)
+                .flatten(-2)
+            )
+
         y_hat = self.classifier(embeddings)
         y_hat = y_hat.mean(dim=1)
 
@@ -306,7 +316,7 @@ class EmbeddingEvaluator(LightningModule):
             aug = self.augment(x, "train")
             embeddings = self.get_embeddings(aug)
 
-        y_hat = self.classify(aug, embeddings)
+        y_hat = self.classify(embeddings)
 
         loss = self.classifier_loss(y_hat, y)
         self.log("train_loss", loss, on_step=True, on_epoch=True, batch_size=x.shape[0])
@@ -322,7 +332,7 @@ class EmbeddingEvaluator(LightningModule):
         aug = self.augment(x, "val")
         embeddings = self.get_embeddings(aug)
 
-        metrics_classification = self.evaluate_classification(aug, embeddings, y, "val")
+        metrics_classification = self.evaluate_classification(embeddings, y, "val")
         self.log_dict(
             metrics_classification, on_step=True, on_epoch=True, batch_size=x.shape[0]
         )
@@ -336,10 +346,7 @@ class EmbeddingEvaluator(LightningModule):
         aug = self.augment(x, "val")
         embeddings = self.get_embeddings(aug)
 
-        metrics_classification = self.evaluate_classification(
-            aug, embeddings, y, "test"
-        )
-        # metrics_dimensionality = self.evaluate_dimensionality(embeddings)
+        metrics_classification = self.evaluate_classification(embeddings, y, "test")
 
         self.log_dict(
             metrics_classification, on_step=True, on_epoch=True, batch_size=x.shape[0]
@@ -348,10 +355,10 @@ class EmbeddingEvaluator(LightningModule):
         return metrics_classification  # | metrics_dimensionality
 
     def evaluate_classification(
-        self, aug: Tensor, embeddings: Tensor, y: Tensor, stage: Optional[str] = None
+        self, embeddings: Tensor, y: Tensor, stage: Optional[str] = None
     ) -> Dict[str, Tensor]:
         """TODO: Docstring."""
-        y_hat = self.classify(aug, embeddings)
+        y_hat = self.classify(embeddings)
 
         metrics = self.metrics(y_hat, y)
 
