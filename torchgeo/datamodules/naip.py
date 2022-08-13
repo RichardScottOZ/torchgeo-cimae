@@ -23,6 +23,7 @@ from ..datasets import (
 )
 from ..samplers.batch import RandomBatchGeoSampler
 from ..samplers.single import GeoSampler, GridGeoSampler
+import torch
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
@@ -209,7 +210,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         cache_size: int = 128,
         pin_memory: bool = False,
         block_size: int = 256,
-        prefetch_factor: int = 50,
+        prefetch_factor: int = 20,
         **kwargs: Any,
     ) -> None:
         """Initialize a LightningDataModule for NAIP and Chesapeake based DataLoaders.
@@ -276,6 +277,11 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         Returns:
             preprocessed CDL data
         """
+        sample["mask"] = torch.tensor(
+            [self.cmap_reindex[i] for i in sample["mask"].flatten().tolist()],
+            dtype=sample["mask"].dtype,
+        ).view(sample["mask"].shape)
+
         sample["label"] = sample["mask"].long()[0]
         sample["label"] = sample["label"].flatten().mode()[0].unsqueeze(0)
 
@@ -296,6 +302,11 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         )
         if self.cdl_root_dir is not None:
             CDL(self.cdl_root_dir, download=False, checksum=False)
+
+        cmap_indices = [i for (i, c) in CDL.cmap.items() if c != (0, 0, 0, 255)]
+        self.cmap_reindex = {
+            i: j for (i, j) in zip(cmap_indices, range(len(cmap_indices)))
+        }
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Initialize the main ``Dataset`` objects.
