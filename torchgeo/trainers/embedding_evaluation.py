@@ -7,15 +7,7 @@ import torch
 from kornia import augmentation as K
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
-from torch.nn import (
-    Conv2d,
-    CrossEntropyLoss,
-    Identity,
-    Linear,
-    Module,
-    Sequential,
-    init,
-)
+from torch.nn import CrossEntropyLoss, Identity, Linear, Module, Sequential
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchmetrics import Accuracy, FBetaScore, JaccardIndex, MetricCollection
 

@@ -6,6 +6,7 @@
 from typing import Any, Dict, List, Optional
 
 import pytorch_lightning as pl
+import torch
 from torch.utils.data import DataLoader
 
 import torchgeo.datamodules as datamodules
@@ -22,8 +23,7 @@ from ..datasets import (
     stack_samples,
 )
 from ..samplers.batch import RandomBatchGeoSampler
-from ..samplers.single import GeoSampler, GridGeoSampler
-import torch
+from ..samplers.single import GridGeoSampler
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045

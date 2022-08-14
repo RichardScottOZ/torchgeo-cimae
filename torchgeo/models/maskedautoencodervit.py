@@ -190,7 +190,6 @@ class DecoderEmbedding(Module):
         num_patches: int,
         input_dim: int = 3,
         embed_dim: int = 768,
-        in_channels: int = 3,
         channel_wise: bool = False,
     ) -> None:
         """TODO: Docstring."""
@@ -198,13 +197,11 @@ class DecoderEmbedding(Module):
 
         self.num_patches = num_patches
         self.embed_dim = embed_dim
-        self.in_channels = in_channels
         self.channel_wise = channel_wise
 
         self.embedder = Linear(input_dim, embed_dim, bias=True)
         self.mask_token = Parameter(
-            -torch.ones(1, self.num_patches * self.in_channels, embed_dim),
-            requires_grad=False,
+            -torch.ones(1, self.num_patches, embed_dim), requires_grad=False
         )
 
         self.initialize_positional_encodings()
@@ -236,6 +233,23 @@ class DecoderEmbedding(Module):
 
         return channel_tokens
 
+    def select_from_mask(self, x: Tensor, mask: Tensor, channels: list[int]) -> Tensor:
+        """Select the elements given a mask."""
+        B, _, _ = x.shape
+
+        x_data = x
+        x = self.mask_token.repeat(B, len(mask) // self.num_patches, 1)
+        x[:, ~mask] = x_data
+
+        # Add mask_tokens if output dim > input dim
+        if len(mask) < self.num_patches * len(channels):
+            x_expand = self.mask_token.repeat(
+                B, len(channels) - (len(mask) // self.num_patches), 1
+            )
+            x = torch.cat([x, x_expand], dim=1)
+
+        return x
+
     def forward(
         self, x: Tensor, mask: Tensor | None = None, channels: list[int] = []
     ) -> Tensor:
@@ -243,11 +257,7 @@ class DecoderEmbedding(Module):
         x = self.embedder(x)
 
         if mask is not None:
-            B, _, _ = x.shape
-            x_data = x
-
-            x = self.mask_token.repeat(B, 1, 1)
-            x[:, ~mask] = x_data
+            x = self.select_from_mask(x, mask, channels)
 
         x += self.positional_embeddings.repeat(len(channels) or 1, 1)
 
@@ -284,7 +294,7 @@ class MaskedDecoderViT(Module):
         self.num_patches = num_patches
 
         self.embed_module = DecoderEmbedding(
-            num_patches, in_channels, embed_dim, out_channels, channel_wise
+            num_patches, in_channels, embed_dim, channel_wise
         )
 
         self.decoder = TransformerEncoder(
@@ -347,7 +357,7 @@ class MaskedAutoencoderViT(Module):
 
         self.encoder = MaskedEncoderViT(
             image_size=image_size,
-            in_channels=4,  # IN_CHANNELS[sensor][bands],
+            in_channels=IN_CHANNELS[sensor][bands],
             patch_size=patch_size,
             channel_wise=channel_wise,
             embed_dim=embed_dim,
@@ -361,7 +371,7 @@ class MaskedAutoencoderViT(Module):
             num_patches=self.encoder.embed_module.num_patches,
             image_size=image_size,
             in_channels=embed_dim,
-            out_channels=3,  # IN_CHANNELS[sensor][bands],
+            out_channels=4,  # IN_CHANNELS[sensor][bands],
             patch_size=patch_size,
             channel_wise=channel_wise,
             embed_dim=decoder_embed_dim,

@@ -221,7 +221,7 @@ class MAETask(LightningModule):
         x = batch["image"]
 
         B, C, *_ = x.shape
-        self.C = C if not self.channel_shuffle else 3
+        self.C = C
         num_patches = (self.crop_size // self.patch_size) ** 2
 
         with torch.no_grad():
@@ -233,8 +233,19 @@ class MAETask(LightningModule):
             encoder_channels = decoder_channels = []
 
             if self.channel_shuffle:
-                encoder_channels = torch.randperm(C, device=x.device).tolist()[: self.C]
-                decoder_channels = torch.randperm(C, device=x.device).tolist()[: self.C]
+                self.num_in_channels = int(torch.randint(1, C, (1,)).item())
+                self.num_out_channels = (
+                    int(torch.randint(self.num_in_channels, C, (1,)).item())
+                    if self.num_in_channels < C
+                    else C
+                )
+
+                encoder_channels = torch.randperm(C, device=x.device).tolist()[
+                    : self.num_in_channels
+                ]
+                decoder_channels = torch.randperm(C, device=x.device).tolist()[
+                    : self.num_out_channels
+                ]
 
                 aug_shuffled = aug_shuffled[:, encoder_channels]
                 aug = aug[:, decoder_channels]
@@ -245,7 +256,7 @@ class MAETask(LightningModule):
             if self.channel_wise:
                 if not self.channel_shuffle:
                     encoder_channels = decoder_channels = torch.arange(
-                        self.C, device=x.device
+                        C, device=x.device
                     ).tolist()
 
                 aug_shuffled = aug_shuffled.flatten(0, 1).unsqueeze(1)
@@ -257,8 +268,8 @@ class MAETask(LightningModule):
         self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
 
         if self.channel_wise:
-            pred = pred.view(B * self.C, num_patches, -1)
-            mask = mask.view(self.C, -1).repeat(B, 1)
+            pred = pred.view(B * self.num_out_channels, num_patches, -1)
+            mask = mask.view(self.num_in_channels, -1).repeat(B, 1)
 
         return loss, aug, aug_shuffled, pred, mask
 
@@ -316,7 +327,29 @@ class MAETask(LightningModule):
             )
             pred = pred.view(self.batch_size, -1, self.crop_size, self.crop_size)
 
-        return {"images": torch.stack([aug_shuffled, masked_aug, aug, pred])}
+        images = self.pad_image_dims(aug_shuffled, masked_aug, aug, pred)
+
+        return {"images": images}
+
+    def pad_image_dims(
+        self, aug_shuffled: Tensor, masked_aug: Tensor, aug: Tensor, pred: Tensor
+    ) -> Tensor:
+        """Pad the image dimensions to match."""
+        B, _, H, W = aug.shape
+
+        black_img = torch.zeros((B, self.C, H, W), device=aug.device)
+
+        aug_shuffled_pad = black_img.clone()
+        aug_shuffled_pad[:, : self.num_in_channels] = aug_shuffled
+        masked_aug_pad = black_img.clone()
+        masked_aug_pad[:, : self.num_in_channels] = masked_aug
+
+        aug_pad = black_img.clone()
+        aug_pad[:, : self.num_out_channels] = aug
+        pred_pad = black_img.clone()
+        pred_pad[:, : self.num_out_channels] = pred
+
+        return torch.stack([aug_shuffled_pad, masked_aug_pad, aug_pad, pred_pad], dim=0)
 
     def validation_epoch_end(
         self,
