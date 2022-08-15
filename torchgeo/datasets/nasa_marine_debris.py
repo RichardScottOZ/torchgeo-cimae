@@ -13,14 +13,14 @@ import torch
 from torch import Tensor
 from torchvision.utils import draw_bounding_boxes
 
-from .geo import VisionDataset
+from .geo import NonGeoDataset
 from .utils import download_radiant_mlhub_dataset, extract_archive
 
 
-class NASAMarineDebris(VisionDataset):
+class NASAMarineDebris(NonGeoDataset):
     """NASA Marine Debris dataset.
 
-    The `NASA Marine Debris <https://mlhub.earth/data/nasa_marine_debris>`_
+    The `NASA Marine Debris <https://mlhub.earth/data/nasa_marine_debris>`__
     dataset is a dataset for detection of floating marine debris in satellite imagery.
 
     Dataset features:
@@ -199,7 +199,7 @@ class NASAMarineDebris(VisionDataset):
             raise RuntimeError(
                 "Dataset not found in `root` directory and `download=False`, "
                 "either specify a different `root` directory or use `download=True` "
-                "to automaticaly download the dataset."
+                "to automatically download the dataset."
             )
 
         # TODO: need a checksum check in here post downloading

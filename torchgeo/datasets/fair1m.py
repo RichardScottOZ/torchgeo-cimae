@@ -15,7 +15,7 @@ import torch
 from PIL import Image
 from torch import Tensor
 
-from .geo import VisionDataset
+from .geo import NonGeoDataset
 from .utils import check_integrity, extract_archive
 
 
@@ -50,10 +50,10 @@ def parse_pascal_voc(path: str) -> Dict[str, Any]:
     return dict(filename=filename, points=points, labels=labels)
 
 
-class FAIR1M(VisionDataset):
+class FAIR1M(NonGeoDataset):
     """FAIR1M dataset.
 
-    The `FAIR1M <http://gaofen-challenge.com/benchmark>`_
+    The `FAIR1M <http://gaofen-challenge.com/benchmark>`__
     dataset is a dataset for remote sensing fine-grained oriented object detection.
 
     Dataset features:

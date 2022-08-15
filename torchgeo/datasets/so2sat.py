@@ -11,14 +11,14 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from .geo import VisionDataset
+from .geo import NonGeoDataset
 from .utils import check_integrity, percentile_normalization
 
 
-class So2Sat(VisionDataset):
+class So2Sat(NonGeoDataset):
     """So2Sat dataset.
 
-    The `So2Sat <https://doi.org/10.1109/MGRS.2020.2964708>`_ dataset consists of
+    The `So2Sat <https://doi.org/10.1109/MGRS.2020.2964708>`__ dataset consists of
     corresponding synthetic aperture radar and multispectral optical image data
     acquired by the Sentinel-1 and Sentinel-2 remote sensing satellites, and a
     corresponding local climate zones (LCZ) label. The dataset is distributed over
@@ -150,6 +150,9 @@ class So2Sat(VisionDataset):
         Raises:
             AssertionError: if ``split`` argument is invalid
             RuntimeError: if data is not found in ``root``, or checksums don't match
+
+        .. versionadded:: 0.3
+           The *bands* parameter.
         """
         try:
             import h5py  # noqa: F401

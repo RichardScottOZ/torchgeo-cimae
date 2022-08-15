@@ -13,14 +13,14 @@ import torch
 from PIL import Image
 from torch import Tensor
 
-from .geo import VisionDataset
+from .geo import NonGeoDataset
 from .utils import download_and_extract_archive
 
 
-class ADVANCE(VisionDataset):
+class ADVANCE(NonGeoDataset):
     """ADVANCE dataset.
 
-    The `ADVANCE <https://akchen.github.io/ADVANCE-DATASET/>`_
+    The `ADVANCE <https://akchen.github.io/ADVANCE-DATASET/>`__
     dataset is a dataset for audio visual scene recognition.
 
     Dataset features:
@@ -199,7 +199,7 @@ class ADVANCE(VisionDataset):
                 "scipy is not installed and is required to use this dataset"
             )
 
-        array = wavfile.read(path)[1]
+        array = wavfile.read(path, mmap=True)[1]
         tensor = torch.from_numpy(array)
         tensor = tensor.unsqueeze(0)
         return tensor

@@ -26,7 +26,6 @@ class RESISC45DataModule(pl.LightningDataModule):
     """
 
     band_means = torch.tensor([0.36820969, 0.38083247, 0.34341029])
-
     band_stds = torch.tensor([0.20339924, 0.18524736, 0.18455448])
 
     def __init__(
@@ -39,7 +38,7 @@ class RESISC45DataModule(pl.LightningDataModule):
             batch_size: The batch size to use in all created DataLoaders
             num_workers: The number of workers to use in all created DataLoaders
         """
-        super().__init__()  # type: ignore[no-untyped-call]
+        super().__init__()
         self.root_dir = root_dir
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -73,7 +72,12 @@ class RESISC45DataModule(pl.LightningDataModule):
                 K.RandomSharpness(p=0.5),
                 K.RandomErasing(p=0.1),
                 K.ColorJitter(
-                    p=0.5, brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1
+                    p=0.5,
+                    brightness=0.1,
+                    contrast=0.1,
+                    saturation=0.1,
+                    hue=0.1,
+                    silence_instantiation_warning=True,
                 ),
                 data_keys=["input"],
             )

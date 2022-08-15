@@ -9,14 +9,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 from torch import Tensor
 
-from .geo import VisionClassificationDataset
+from .geo import NonGeoClassificationDataset
 from .utils import check_integrity, download_url, extract_archive
 
 
-class UCMerced(VisionClassificationDataset):
+class UCMerced(NonGeoClassificationDataset):
     """UC Merced dataset.
 
-    The `UC Merced <http://weegee.vision.ucmerced.edu/datasets/landuse.html>`_
+    The `UC Merced <http://weegee.vision.ucmerced.edu/datasets/landuse.html>`__
     dataset is a land use classification dataset of 2.1k 256x256 1ft resolution RGB
     images of urban locations around the U.S. extracted from the USGS National Map Urban
     Area Imagery collection with 21 land use classes (100 images per class).
@@ -175,7 +175,7 @@ class UCMerced(VisionClassificationDataset):
             raise RuntimeError(
                 "Dataset not found in `root` directory and `download=False`, "
                 "either specify a different `root` directory or use `download=True` "
-                "to automaticaly download the dataset."
+                "to automatically download the dataset."
             )
 
         # Download and extract the dataset
@@ -212,7 +212,7 @@ class UCMerced(VisionClassificationDataset):
         """Plot a sample from the dataset.
 
         Args:
-            sample: a sample returned by :meth:`VisionClassificationDataset.__getitem__`
+            sample: a sample returned by :meth:`NonGeoClassificationDataset.__getitem__`
             show_titles: flag indicating whether to show titles above each panel
             suptitle: optional string to use as a suptitle
 

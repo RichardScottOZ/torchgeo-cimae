@@ -13,14 +13,14 @@ import torch
 from PIL import Image
 from torch import Tensor
 
-from .geo import VisionDataset
+from .geo import NonGeoDataset
 from .utils import download_and_extract_archive
 
 
-class LEVIRCDPlus(VisionDataset):
+class LEVIRCDPlus(NonGeoDataset):
     """LEVIR-CD+ dataset.
 
-    The `LEVIR-CD+ <https://github.com/S2Looking/Dataset>`_
+    The `LEVIR-CD+ <https://github.com/S2Looking/Dataset>`__
     dataset is a dataset for building change detection.
 
     Dataset features:

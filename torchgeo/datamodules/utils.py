@@ -8,11 +8,11 @@ from typing import Any, List, Optional, Sequence, Tuple, Union
 from torch import float64, linspace, randperm
 from torch.utils.data import Subset, TensorDataset, random_split
 
-from ..datasets import BoundingBox, VisionDataset
+from ..datasets import BoundingBox, NonGeoDataset
 
 
 def dataset_split(
-    dataset: Union[TensorDataset, VisionDataset],
+    dataset: Union[TensorDataset, NonGeoDataset],
     val_pct: float,
     test_pct: Optional[float] = None,
 ) -> List[Subset[Any]]:

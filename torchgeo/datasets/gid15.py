@@ -13,14 +13,14 @@ import torch
 from PIL import Image
 from torch import Tensor
 
-from .geo import VisionDataset
+from .geo import NonGeoDataset
 from .utils import download_and_extract_archive
 
 
-class GID15(VisionDataset):
+class GID15(NonGeoDataset):
     """GID-15 dataset.
 
-    The `GID-15 <https://captain-whu.github.io/GID15/>`_
+    The `GID-15 <https://captain-whu.github.io/GID15/>`__
     dataset is a dataset for semantic segmentation.
 
     Dataset features:
