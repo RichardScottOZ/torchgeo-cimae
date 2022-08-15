@@ -8,6 +8,7 @@
 import os
 from typing import Any, Dict, List, Tuple, Type, cast
 
+import wandb
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import ConfigAttributeError
 from pytorch_lightning import LightningDataModule, LightningModule, Trainer
@@ -246,6 +247,7 @@ def main(conf: DictConfig) -> None:
             log_model=(not offline),
             offline=offline,
         )
+        wandb.run.log_code("torchgeo")
     else:
         raise ValueError(
             f"experiment.task={task_name} is not recognized as a valid task"
@@ -254,7 +256,7 @@ def main(conf: DictConfig) -> None:
     callbacks: List[Callback] = []
     if conf.program.overwrite:
         checkpoint_callback = ModelCheckpoint(
-            monitor="val_loss", dirpath=run_dir, save_top_k=1, save_last=True
+            dirpath=run_dir, every_n_epochs=0, save_last=True
         )
         callbacks.append(checkpoint_callback)
 
@@ -267,6 +269,7 @@ def main(conf: DictConfig) -> None:
     trainer_args["callbacks"] = callbacks
     trainer_args["logger"] = logger
     trainer_args["default_root_dir"] = experiment_dir
+
     trainer = Trainer(**trainer_args)
 
     if trainer_args.get("auto_lr_find"):

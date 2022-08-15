@@ -1,6 +1,6 @@
 trainer:
   gpus: [1]
-  max_epochs: 500
+  max_epochs: 100
   precision: 32
   benchmark: True
 experiment:
@@ -18,19 +18,21 @@ experiment:
     image_size: 256
     crop_size: 224
     patch_size: 16
+    batch_size: 64
     channel_wise: True
-    channel_shuffle: False
-    embed_dim: 1024
+    channel_shuffle: True
+    embed_dim: 512
     depth: 6
     num_heads: 1
     decoder_depth: 2
     decoder_num_heads: 1
-    decoder_embed_dim: 512
+    decoder_embed_dim: 256
   datamodule:
     naip_root_dir: "/data/users/mike/data/NAIP"
+    # cdl_root_dir: "/data/users/mike/data/CDL" # TODO: ADDED CDL ROOT
     batch_size: 64
-    train_length: 10000 #0
-    val_length: 1500 #0
+    train_length: 50000 #0
+    val_length: 3000 #0
     num_workers: 8
     patch_size: 240
     dataset_split: "roi_split_grid"
@@ -44,8 +46,8 @@ experiment:
       - "2017-01-01"
       - "EPSG:4326"
       - "EPSG:26911"
-    train_sampler_class: "RandomBlockBatchGeoSampler"
-    val_sampler_class: "RandomBlockBatchGeoSampler"
+    train_sampler_class: "RandomBlockGeoSampler"
+    val_sampler_class: "RandomBlockGeoSampler"
     val_pct: 0.14
     test_pct: 0.14
     cache: True

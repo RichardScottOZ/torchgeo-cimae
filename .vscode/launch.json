@@ -130,7 +130,7 @@
                 "program.log_dir=/data/users/mike/logs",
                 "program.overwrite=False",
                 "logger.offline=True",
-                "trainer.gpus=[1]"
+                "trainer.gpus=[0]"
             ],
             "justMyCode": true
         },
