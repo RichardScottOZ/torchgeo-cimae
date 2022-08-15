@@ -233,12 +233,12 @@ class MAETask(LightningModule):
             encoder_channels = decoder_channels = []
 
             if self.channel_shuffle:
-                self.num_in_channels = int(torch.randint(1, C, (1,)).item())
-                self.num_out_channels = (
-                    int(torch.randint(self.num_in_channels, C, (1,)).item())
-                    if self.num_in_channels < C
-                    else C
-                )
+                self.num_in_channels = 4  # int(torch.randint(1, C, (1,)).item())
+                self.num_out_channels = 1  # (
+                #     int(torch.randint(self.num_in_channels, C, (1,)).item())
+                #     if self.num_in_channels < C
+                #     else C
+                # )
 
                 encoder_channels = torch.randperm(C, device=x.device).tolist()[
                     : self.num_in_channels
