@@ -111,6 +111,9 @@ class MAETask(LightningModule):
         self.channel_wise = self.hyperparams.get("channel_wise", False)
         self.channel_shuffle = self.hyperparams.get("channel_shuffle", False)
         self.embed_token = self.hyperparams.get("embed_token", False)
+        self.embed_token_reduction = self.hyperparams.get(
+            "embed_token_reduction", False
+        )
         self.batch_size = self.hyperparams.get("batch_size", 64)
 
         self.model = MaskedAutoencoderViT(
@@ -120,6 +123,7 @@ class MAETask(LightningModule):
             patch_size=self.patch_size,
             channel_wise=self.channel_wise,
             embed_token=self.embed_token,
+            embed_token_reduction=self.embed_token_reduction,
             embed_dim=self.hyperparams.get("embed_dim", 1024),
             depth=self.hyperparams.get("depth", 24),
             num_heads=self.hyperparams.get("num_heads", 16),

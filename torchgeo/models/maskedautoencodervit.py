@@ -149,6 +149,7 @@ class MaskedEncoderViT(Module):
         patch_size: int = 16,
         channel_wise: bool = False,
         embed_token: bool = False,
+        embed_token_reduction: bool = False,
         embed_dim: int = 768,
         depth: int = 12,
         num_heads: int = 12,
@@ -159,10 +160,13 @@ class MaskedEncoderViT(Module):
         super().__init__()
 
         self.in_channels = in_channels
+        self.embed_dim = embed_dim
+        self.embed_token_reduction = embed_token_reduction
 
         self.embed_module = EncoderEmbedding(
             in_channels, embed_dim, patch_size, image_size, channel_wise
         )
+        self.num_patches = self.embed_module.num_patches
         self.encoder = TransformerEncoder(
             embed_dim, depth, num_heads, dropout_rate, dropout_attn
         )
@@ -180,24 +184,57 @@ class MaskedEncoderViT(Module):
 
         self.apply(_init_weights)
 
+    def reduce_embed_token(
+        self, x: Tensor, mask: Tensor, embed_token: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        """Reduce the embed token by using the values not masked by the mask in place."""
+        x = torch.cat((x, embed_token), dim=1)
+
+        mask = mask.view(-1, self.num_patches)
+        visible_mask = torch.zeros(
+            1, self.num_patches, device=x.device, dtype=torch.bool
+        )
+        mask = torch.cat([mask, visible_mask], dim=0)
+
+        selection_mask = (~mask).T.float().argmax(dim=1)
+        selection_mask *= self.num_patches
+        selection_mask += torch.arange(self.num_patches, device=x.device)
+
+        embed_token = x[:, selection_mask]
+
+        mask = mask.flatten()
+        mask[selection_mask] = True
+        mask = mask[: -self.num_patches]
+
+        x = x[:, : -self.num_patches]
+        x = x[:, ~mask]
+
+        return x, embed_token
+
     def forward(
         self, x: Tensor, mask: Tensor | None = None, channels: list[int] = []
     ) -> Tensor:
         """Forward pass of the model."""
         x = self.embed_module(x, channels)
 
-        if mask is not None:
+        if mask is not None and not self.embed_token_reduction:
             x = x[:, ~mask]
 
         if self.embed_token is not None:
             B, *_ = x.shape
-            x = torch.cat((self.embed_token.repeat(B, 1, 1), x), dim=1)
+            embed_token = self.embed_token.repeat(B, 1, 1)
+
+            # TODO: CURRENT -> Check at inference without mask
+            if self.embed_token_reduction and mask is not None:
+                x, embed_token = self.reduce_embed_token(x, mask, embed_token)
+
+            x = torch.cat([embed_token, x], dim=1)
 
         x = self.encoder(x)
         x = self.norm(x)
 
         if self.embed_token is not None:
-            x = x[:, : self.embed_module.num_patches]
+            x = x[:, : self.num_patches]
 
         return x
 
@@ -340,6 +377,7 @@ class MaskedAutoencoderViT(Module):
         patch_size: int = 16,
         channel_wise: bool = False,
         embed_token: bool = False,
+        embed_token_reduction: bool = False,
         embed_dim: int = 1024,
         depth: int = 24,
         num_heads: int = 16,
@@ -360,6 +398,7 @@ class MaskedAutoencoderViT(Module):
             patch_size=patch_size,
             channel_wise=channel_wise,
             embed_token=embed_token,
+            embed_token_reduction=embed_token_reduction,
             embed_dim=embed_dim,
             depth=depth,
             num_heads=num_heads,

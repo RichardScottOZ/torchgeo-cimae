@@ -163,6 +163,7 @@ class EmbeddingEvaluator(LightningModule):
         crop_size = _to_tuple(crop_size)
 
         self.in_channels = self.hyperparams.get("in_channels", 4)
+        self.out_channels = self.hyperparams.get("out_channels", self.in_channels)
         output = self.get_embeddings(
             torch.zeros((2, self.in_channels, crop_size[0], crop_size[1]))
         )
@@ -182,10 +183,10 @@ class EmbeddingEvaluator(LightningModule):
             self.num_patches = (crop_size[0] // self.patch_size) * (
                 crop_size[1] // self.patch_size
             )
-            out_dim = output.view(2, self.num_patches * self.in_channels, -1).shape[-1]
+            out_dim = output.view(2, self.num_patches * self.out_channels, -1).shape[-1]
 
         self.classifier = Linear(
-            out_dim if not self.channel_wise else out_dim * self.in_channels,
+            out_dim if not self.channel_wise else out_dim * self.out_channels,
             num_classes,
         )
         self.classifier.weight.data.normal_(mean=0.0, std=0.01)
@@ -288,7 +289,7 @@ class EmbeddingEvaluator(LightningModule):
             embeddings = embeddings.view(B, self.num_patches, -1)
         else:
             embeddings = (
-                embeddings.view(B, self.in_channels, self.num_patches, -1)
+                embeddings.view(B, self.out_channels, self.num_patches, -1)
                 .transpose(1, 2)
                 .flatten(-2)
             )
