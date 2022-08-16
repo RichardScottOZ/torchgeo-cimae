@@ -222,6 +222,7 @@ def random_masking(
     return mask
 
 
+# TODO: Rework
 def focal_masking(
     masks: Tensor,
     focal_mask_ratio: float,

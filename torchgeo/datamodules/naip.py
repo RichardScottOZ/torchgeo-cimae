@@ -317,9 +317,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
             CDL(self.cdl_root_dir, download=False, checksum=False)
 
         cmap_indices = [i for (i, c) in CDL.cmap.items() if c != (0, 0, 0, 255)]
-        self.cmap_reindex = {
-            i: j for (i, j) in zip(cmap_indices, range(len(cmap_indices)))
-        }
+        self.cmap_reindex = {c: i for (i, c) in enumerate(cmap_indices)}
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Initialize the main ``Dataset`` objects.

@@ -109,8 +109,9 @@ class MAETask(LightningModule):
         self.crop_size = self.hyperparams.get("crop_size", 224)
         self.patch_size = self.hyperparams.get("patch_size", 16)
         self.channel_wise = self.hyperparams.get("channel_wise", False)
-        self.batch_size = self.hyperparams.get("batch_size", 64)
         self.channel_shuffle = self.hyperparams.get("channel_shuffle", False)
+        self.embed_token = self.hyperparams.get("embed_token", False)
+        self.batch_size = self.hyperparams.get("batch_size", 64)
 
         self.model = MaskedAutoencoderViT(
             sensor=self.hyperparams["sensor"],
@@ -118,6 +119,7 @@ class MAETask(LightningModule):
             image_size=self.crop_size,
             patch_size=self.patch_size,
             channel_wise=self.channel_wise,
+            embed_token=self.embed_token,
             embed_dim=self.hyperparams.get("embed_dim", 1024),
             depth=self.hyperparams.get("depth", 24),
             num_heads=self.hyperparams.get("num_heads", 16),
@@ -234,18 +236,21 @@ class MAETask(LightningModule):
 
             if self.channel_shuffle:
                 self.num_in_channels = 4  # int(torch.randint(1, C, (1,)).item())
-                self.num_out_channels = 1  # (
+                self.num_out_channels = 4  # (
                 #     int(torch.randint(self.num_in_channels, C, (1,)).item())
                 #     if self.num_in_channels < C
                 #     else C
                 # )
 
-                encoder_channels = torch.randperm(C, device=x.device).tolist()[
-                    : self.num_in_channels
-                ]
-                decoder_channels = torch.randperm(C, device=x.device).tolist()[
-                    : self.num_out_channels
-                ]
+                encoder_channels = [0, 1, 2, 3]
+                # torch.randperm(C, device=x.device).tolist()[
+                #     : self.num_in_channels
+                # ]
+
+                decoder_channels = [0, 1, 2, 3]
+                # torch.randperm(C, device=x.device).tolist()[
+                #     : self.num_out_channels
+                # ]
 
                 aug_shuffled = aug_shuffled[:, encoder_channels]
                 aug = aug[:, decoder_channels]

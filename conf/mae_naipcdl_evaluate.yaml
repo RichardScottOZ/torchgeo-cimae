@@ -19,6 +19,7 @@ experiment:
     channel_wise: True
     patch_size: 16
     in_channels: 4
+    out_channels: 1
     num_classes: 134
     image_size: 256
     crop_size: 224

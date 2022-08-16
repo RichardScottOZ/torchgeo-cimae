@@ -21,12 +21,13 @@ experiment:
     batch_size: 64
     channel_wise: True
     channel_shuffle: True
+    embed_token: True
     embed_dim: 512
     depth: 6
     num_heads: 1
     decoder_depth: 2
     decoder_num_heads: 1
-    decoder_embed_dim: 256
+    decoder_embed_dim: 512
   datamodule:
     naip_root_dir: "/data/users/mike/data/NAIP"
     # cdl_root_dir: "/data/users/mike/data/CDL" # TODO: ADDED CDL ROOT
