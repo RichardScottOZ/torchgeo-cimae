@@ -39,11 +39,13 @@ def embedding_loss(
     return F.mse_loss(embedding1, embedding2)
 
 
-def masked_reconstruction_loss(
-    x: Tensor, pred: Tensor, mask: Tensor, patch_size: int, visible_prob: float = 0.0
-) -> Tensor:
+def masked_reconstruction_loss(item: dict[str, Tensor], patch_size: int) -> Tensor:
     """Compute masked reconstruction loss."""
-    target = patchify(x, patch_size)
+    target, pred, mask = item["target"], item["pred"], item["mask_target"]
+    B, *_ = pred.shape
+
+    target = patchify(target, patch_size)
+    target = target.view(pred.shape)
 
     loss = (pred - target) ** 2
     loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
@@ -52,7 +54,7 @@ def masked_reconstruction_loss(
     if num_hidden == 0:
         return cast(Tensor, loss.mean())
 
-    loss = (loss * mask).sum() / num_hidden  # mean loss on removed patches
+    loss = (loss * mask).sum() / (B * num_hidden)  # mean loss on removed patches
 
     return cast(Tensor, loss)
 
@@ -133,23 +135,19 @@ class Augmentations(Module):
         if stage is None:
             return cast(Tensor, self.augmentation["train"](x))
 
-        if "transform" in stage:
-            if mask is None:
-                raise ValueError("Mask is required for transform")
-
-            B, P = mask.shape
-            side = int(P**0.5)
-            mask = mask.view(B, 1, side, side).float()
+        if "transform" in stage and mask is not None:
+            B, C, *_ = x.shape
+            P = len(mask)
+            side = int((P // C) ** 0.5)
+            mask = mask.view(1, C, side, side).repeat(B, 1, 1, 1).float()
             x, mask = self.augmentation[stage](x, mask)
-            mask = mask.view(B, -1).round().bool()  # type: ignore
+            mask = mask.view(B, -1)[0].round().bool()  # type: ignore
 
             return x, mask
 
         return cast(Tensor, self.augmentation[stage](x))
 
-    def inverse(
-        self, pred: Tensor, mask: Tensor, latent: Tensor, mask_org: Tensor, stage: str
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    def inverse(self, item: dict[str, Tensor], stage: str) -> dict[str, Tensor]:
         """Applys augmentations to the input tensor.
 
         Args:
@@ -158,29 +156,26 @@ class Augmentations(Module):
         Returns:
             an augmented batch of imagery
         """
-        if "transform" not in stage:
-            raise ValueError("Only transform stages are supported")
+        pred, latent = item["pred"], item["latent"]
 
-        B, P = mask.shape
-        _, _, H = latent.shape
-        side = int(P**0.5)
+        B, *_ = latent.shape
+        *_, PS = pred.shape
 
         pred = unpatchify(pred, self.patch_size)
-        latent_full = torch.zeros((B, P, H), device=pred.device)
-        latent_full[~mask] = latent.flatten(0, 1)
-        latent_full = unpatchify(latent_full, self.patch_size)
-        mask = mask.view(B, 1, side, side).float()
+        latent = unpatchify(latent, self.patch_size)
 
-        pred, latent_full, mask = self.augmentation[stage].inverse(
-            pred, latent_full, mask, data_keys=["input", "input", "mask"]
+        _, _, H, W = pred.shape
+        pred = pred.view(B, -1, H, W)
+
+        pred, latent = self.augmentation[stage].inverse(
+            pred, latent, data_keys=["input", "input"]
         )
 
-        pred = patchify(pred, self.patch_size)
-        mask = mask.view(B, -1).round().bool()
-        latent_full = patchify(latent_full, self.patch_size)
-        latent = latent_full[~mask_org].view_as(latent)
+        pred = pred.flatten(0, 1).unsqueeze(1)
+        item["pred"] = patchify(pred, self.patch_size).view(B, -1, PS)
+        item["latent"] = patchify(latent, self.patch_size)
 
-        return pred, mask, latent
+        return item
 
 
 class MSAETask(LightningModule):
@@ -188,18 +183,27 @@ class MSAETask(LightningModule):
 
     def config_task(self) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
-        self.image_size: int = self.hyperparams.get("image_size", 256)
-        self.crop_size: int = self.hyperparams.get("crop_size", 224)
-        self.patch_size: int = self.hyperparams.get("patch_size", 16)
-        self.embed_dim: int = self.hyperparams.get("embed_dim", 512)
-        self.dense_embed: bool = self.hyperparams.get("dense_embed", False)
+        self.image_size = self.hyperparams.get("image_size", 256)
+        self.crop_size = self.hyperparams.get("crop_size", 224)
+        self.patch_size = self.hyperparams.get("patch_size", 16)
+        self.channel_wise = self.hyperparams.get("channel_wise", False)
+        self.channel_shuffle = self.hyperparams.get("channel_shuffle", False)
+        self.embed_token = self.hyperparams.get("embed_token", False)
+        self.embed_token_reduction = self.hyperparams.get(
+            "embed_token_reduction", False
+        )
+        self.B = self.hyperparams.get("batch_size", 64)
+        self.num_patches = (self.crop_size // self.patch_size) ** 2
 
         self.model = MaskedAutoencoderViT(
             sensor=self.hyperparams["sensor"],
             bands=self.hyperparams.get("bands", "all"),
             image_size=self.crop_size,
             patch_size=self.patch_size,
-            embed_dim=self.embed_dim,
+            channel_wise=self.channel_wise,
+            embed_token=self.embed_token,
+            embed_token_reduction=self.embed_token_reduction,
+            embed_dim=self.hyperparams.get("embed_dim", 1024),
             depth=self.hyperparams.get("depth", 24),
             num_heads=self.hyperparams.get("num_heads", 16),
             dropout_rate=self.hyperparams.get("dropout_rate", 0.0),
@@ -209,19 +213,19 @@ class MSAETask(LightningModule):
             decoder_num_heads=self.hyperparams.get("decoder_num_heads", 16),
             decoder_dropout_rate=self.hyperparams.get("decoder_dropout_rate", 0.0),
             decoder_dropout_attn=self.hyperparams.get("decoder_dropout_attn", 0.0),
-            return_latent=True,
         )
 
         self.mask_fn = self.hyperparams.get(
-            "mask_fn", ["focal_masking", "random_masking"]
+            "mask_fn", ["random_masking"]  # ["focal_masking", "random_masking"]
         )
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
                 "focal_mask_ratio": 0.3,
-                "focal_mask_probability": 0.3,
+                "focal_mask_probability": 0.0,
+                "num_patches": (self.crop_size // self.patch_size) ** 2,
                 "random_mask_ratio": 0.7,
-                "random_mask_probability": 0.8,
+                "random_mask_probability": 1.0,
             },
         )
 
@@ -296,55 +300,33 @@ class MSAETask(LightningModule):
 
     def shared_step(
         self, stage: str | None = None, *args: Any, **kwargs: Any
-    ) -> dict[str, Tensor]:
+    ) -> dict[str, Tensor | dict[str, Tensor]]:
         """TODO: Docstring."""
         batch = args[0]
         x: Tensor = batch["image"]
-        _, C, *_ = x.shape
+        _, self.C, *_ = x.shape
 
         with torch.no_grad():
-            # Augment img and generate mask
-            aug1 = self.augment(x, stage)
-            aug2 = aug1 if self.dense_embed else self.augment(x, stage)
+            target = self.augment(x, stage)
+            mask = self.generate_mask(self.C, self.num_patches, x.device)
 
-            mask1 = self.generate_mask(aug1)
-            mask2 = mask1 if self.dense_embed else self.generate_mask(aug2)
+            item1 = self.get_item(target, mask, "transform", self.C)
+            item2 = self.get_item(target, mask, "transform_prime", self.C)
 
-            # Shuffle img channels
-            channels1_shuffle, channels2_shuffle = (
-                torch.randperm(C),
-                torch.randperm(C),
-            )
-            aug1_shuffled, aug2_shuffled = (
-                aug1[:, channels1_shuffle],
-                aug2[:, channels2_shuffle],
-            )
+        item1 = self.forward(item1)
+        item2 = self.forward(item2)
 
-            # Transform img and mask
-            aug1_shuffled, mask1 = self.augment(aug1_shuffled, "transform", mask1)
-            aug2_shuffled, mask2 = self.augment(aug2_shuffled, "transform_prime", mask2)
+        item1["pred"] = item1["pred"].view(self.B * self.C, self.num_patches, -1)
+        item2["pred"] = item2["pred"].view(self.B * self.C, self.num_patches, -1)
 
-        # Forward pass
-        pred1, latent1 = self.forward(aug1_shuffled, mask1)
-        pred2, latent2 = self.forward(aug2_shuffled, mask2)
-
-        # Restore transform augmentation
-        if self.dense_embed:
-            pred1, mask1, latent1 = self.augment.inverse(
-                pred1, mask1, latent1, mask1, "transform"
-            )
-            pred2, mask2, latent2 = self.augment.inverse(
-                pred2, mask2, latent2, mask2, "transform_prime"
-            )
+        # Restore transform augmentation for pred & latent
+        item1 = self.augment.inverse(item1, "transform")
+        item2 = self.augment.inverse(item2, "transform_prime")
 
         # Calculate losses
-        loss_rec1 = masked_reconstruction_loss(
-            aug1[:, :3], pred1, mask1, self.patch_size
-        )
-        loss_rec2 = masked_reconstruction_loss(
-            aug2[:, :3], pred2, mask2, self.patch_size
-        )
-        loss_embedding = embedding_loss(latent1, latent2, self.dense_embed)
+        loss_rec1 = masked_reconstruction_loss(item1, self.patch_size)
+        loss_rec2 = masked_reconstruction_loss(item2, self.patch_size)
+        loss_embedding = embedding_loss(item1["latent"], item2["latent"])
         loss = loss_embedding + (loss_rec1 + loss_rec2) / 2
 
         self.log_dict(
@@ -358,29 +340,49 @@ class MSAETask(LightningModule):
             on_epoch=True,
         )
 
+        return {"loss": loss, "item1": item1, "item2": item2}
+
+    def get_item(
+        self, target: Tensor, mask: Tensor, transform_stage: str, C: int
+    ) -> dict[str, Tensor]:
+        """Get the item for the given transform stage."""
+        input = target.clone()
+        mask_target = mask
+
+        encoder_channels = torch.randperm(C, device=target.device).tolist()
+        decoder_channels = torch.randperm(C, device=target.device).tolist()
+
+        input = input[:, encoder_channels]
+        target = target[:, decoder_channels]
+
+        mask_target = mask.view(C, -1)[decoder_channels].flatten()
+        mask = mask.view(C, -1)[encoder_channels].flatten()
+
+        input, mask = self.augment(input, transform_stage, mask)
+
+        input = input.flatten(0, 1).unsqueeze(1)
+        target = target.flatten(0, 1).unsqueeze(1)
+
         return {
-            "loss": loss,
-            "loss_embedding": loss_embedding,
-            "loss_rec1": loss_rec1,
-            "loss_rec2": loss_rec2,
-            "aug1": aug1,
-            "aug1_shuffled": aug1_shuffled,
-            "pred1": pred1,
-            "mask1": mask1,
-            "aug2": aug2,
-            "aug2_shuffled": aug2_shuffled,
-            "pred2": pred2,
-            "mask2": mask2,
+            "input": input,
+            "target": target,
+            "mask": mask,
+            "mask_target": mask_target,
+            "encoder_channels": encoder_channels,  # type: ignore
+            "decoder_channels": decoder_channels,  # type: ignore
         }
 
-    def generate_mask(self, x: Tensor) -> Tensor:
-        """Generate masks based on mask_fn and mask_kwargs."""
-        B, *_ = x.shape
-        num_patches = (self.crop_size // self.patch_size) ** 2
-
-        mask = torch.zeros((B, num_patches), device=x.device, dtype=torch.bool)
+    def generate_mask(
+        self, C: int, num_patches: int, device: torch.device | str
+    ) -> Tensor:
+        """Generate a mask of the image."""
+        mask = torch.zeros(
+            num_patches if not self.channel_wise else num_patches * C,
+            device=device,
+            dtype=torch.bool,
+        )
         for masking_name in self.mask_fn:
-            mask = MASKING_FUNCTIONS[masking_name](x, mask, **self.mask_kwargs)
+            mask = MASKING_FUNCTIONS[masking_name](mask, **self.mask_kwargs)
 
         return mask
 
@@ -408,19 +410,12 @@ class MSAETask(LightningModule):
         if args[1] > 0:
             return {}
 
-        images1 = self.prepare_output(
-            output["aug1"], output["aug1_shuffled"], output["pred1"], output["mask1"]
-        )
-
-        images2 = self.prepare_output(
-            output["aug2"], output["aug2_shuffled"], output["pred2"], output["mask2"]
-        )
+        images1 = self.prepare_output(output["item1"])  # type: ignore
+        images2 = self.prepare_output(output["item2"])  # type: ignore
 
         return {"images1": images1, "images2": images2}
 
-    def prepare_output(
-        self, aug: Tensor, aug_shuffled: Tensor, pred: Tensor, mask: Tensor
-    ) -> Tensor:
+    def prepare_output(self, item: dict[str, Tensor]) -> Tensor:
         """Prepare the output for logging.
 
         Args:
@@ -431,17 +426,32 @@ class MSAETask(LightningModule):
         Returns:
             output from the model
         """
-        aug_shuffled = aug_shuffled[:, :3]
-        aug_patch = patchify(aug_shuffled, self.patch_size)
+        input, target, pred, mask = (
+            item["input"],
+            item["target"],
+            item["pred"],
+            item["mask"],
+        )
 
-        mask_expanded = (~mask.bool()).unsqueeze(-1).expand(aug_patch.shape)
-        masked_aug = torch.zeros_like(aug_patch, device=self.device)  # type: ignore
-        masked_aug[mask_expanded] = aug_patch[mask_expanded]
+        pred = pred.view(self.B * self.C, self.num_patches, -1)
+        mask = mask.view(self.C, -1).repeat(self.B, 1)
+
+        target_patch = patchify(input, self.patch_size)
+        mask_expanded = (~mask.bool()).unsqueeze(-1).expand(target_patch.shape)
+        masked_target = torch.zeros_like(target_patch, device=input.device)
+        masked_target[mask_expanded] = target_patch[mask_expanded]
 
         pred = unpatchify(pred, self.patch_size)
-        masked_aug = unpatchify(masked_aug, self.patch_size)
+        masked_target = unpatchify(masked_target, self.patch_size)
 
-        return torch.stack([aug[:, :3], masked_aug, pred])
+        target = target.view(self.B, -1, self.crop_size, self.crop_size)
+        input = input.view(self.B, -1, self.crop_size, self.crop_size)
+        masked_target = masked_target.view(
+            self.B, -1, self.crop_size, self.crop_size
+        )
+        pred = pred.view(self.B, -1, self.crop_size, self.crop_size)
+
+        return torch.stack([input, masked_target, target, pred])
 
     def validation_epoch_end(
         self,
