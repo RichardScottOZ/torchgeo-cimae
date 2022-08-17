@@ -223,7 +223,7 @@ class NAIPCDLDataModule(pl.LightningDataModule):
         cache_size: int = 128,
         pin_memory: bool = False,
         block_size: int = 256,
-        prefetch_factor: int = 20,
+        prefetch_factor: int = 10,
         **kwargs: Any,
     ) -> None:
         """Initialize a LightningDataModule for NAIP and Chesapeake based DataLoaders.
