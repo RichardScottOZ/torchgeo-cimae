@@ -114,7 +114,8 @@ class MAETask(LightningModule):
         self.embed_token_reduction = self.hyperparams.get(
             "embed_token_reduction", False
         )
-        self.batch_size = self.hyperparams.get("batch_size", 64)
+        self.B = self.hyperparams.get("batch_size", 64)
+        self.num_patches = (self.crop_size // self.patch_size) ** 2
 
         self.model = MaskedAutoencoderViT(
             sensor=self.hyperparams["sensor"],
@@ -221,66 +222,62 @@ class MAETask(LightningModule):
 
     def shared_step(
         self, stage: str | None = None, *args: Any, **kwargs: Any
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    ) -> dict[str, Tensor]:
         """TODO: Docstring."""
         batch = args[0]
         x = batch["image"]
-
-        B, C, *_ = x.shape
-        self.C = C
-        num_patches = (self.crop_size // self.patch_size) ** 2
+        _, self.C, *_ = x.shape
 
         with torch.no_grad():
-            aug = self.augment(x, stage)
-            mask = self.generate_mask(C, num_patches, x.device)
+            target = self.augment(x, stage)
+            mask = self.generate_mask(self.C, self.num_patches, x.device)
 
-            aug_shuffled = aug.clone()
-            mask_dec = mask
+            input = target.clone()
+            mask_target = mask
             encoder_channels = decoder_channels = []
 
             if self.channel_shuffle:
-                self.num_in_channels = 4  # int(torch.randint(1, C, (1,)).item())
-                self.num_out_channels = 4  # (
-                #     int(torch.randint(self.num_in_channels, C, (1,)).item())
-                #     if self.num_in_channels < C
-                #     else C
-                # )
+                self.num_in_channels = self.C
+                self.num_out_channels = self.C
 
-                encoder_channels = [0, 1, 2, 3]
-                # torch.randperm(C, device=x.device).tolist()[
-                #     : self.num_in_channels
-                # ]
+                encoder_channels = torch.randperm(self.C, device=x.device).tolist()[
+                    : self.num_in_channels
+                ]
+                decoder_channels = torch.randperm(self.C, device=x.device).tolist()[
+                    : self.num_out_channels
+                ]
 
-                decoder_channels = [0, 1, 2, 3]
-                # torch.randperm(C, device=x.device).tolist()[
-                #     : self.num_out_channels
-                # ]
+                input = input[:, encoder_channels]
+                target = target[:, decoder_channels]
 
-                aug_shuffled = aug_shuffled[:, encoder_channels]
-                aug = aug[:, decoder_channels]
-
-                mask_dec = mask.view(C, -1)[decoder_channels].flatten()
-                mask = mask.view(C, -1)[encoder_channels].flatten()
+                mask_target = mask.view(self.C, -1)[decoder_channels].flatten()
+                mask = mask.view(self.C, -1)[encoder_channels].flatten()
 
             if self.channel_wise:
                 if not self.channel_shuffle:
                     encoder_channels = decoder_channels = torch.arange(
-                        C, device=x.device
+                        self.C, device=x.device
                     ).tolist()
 
-                aug_shuffled = aug_shuffled.flatten(0, 1).unsqueeze(1)
-                aug = aug.flatten(0, 1).unsqueeze(1)
+                input = input.flatten(0, 1).unsqueeze(1)
+                target = target.flatten(0, 1).unsqueeze(1)
 
-        pred = self.forward(aug_shuffled, mask, encoder_channels, decoder_channels)
-        loss = masked_reconstruction_loss(aug, pred, mask_dec, self.patch_size)
+            item = {
+                "input": input,
+                "target": target,
+                "mask": mask,
+                "encoder_channels": encoder_channels,
+                "decoder_channels": decoder_channels,
+            }
 
-        self.log(f"{stage}_loss", loss, on_step=stage != "val", on_epoch=True)
+        item = self.forward(item)
+        item["loss"] = masked_reconstruction_loss(
+            target, item["pred"], mask_target, self.patch_size
+        )
 
-        if self.channel_wise:
-            pred = pred.view(B * self.num_out_channels, num_patches, -1)
-            mask = mask.view(self.num_in_channels, -1).repeat(B, 1)
+        self.log(f"{stage}_loss", item["loss"], on_step=stage != "val", on_epoch=True)
 
-        return loss, aug, aug_shuffled, pred, mask
+        return item
 
     def generate_mask(
         self, C: int, num_patches: int, device: torch.device | str
@@ -305,9 +302,9 @@ class MAETask(LightningModule):
         Returns:
             training loss
         """
-        loss, *_ = self.shared_step("train", *args, **kwargs)
+        item = self.shared_step("train", *args, **kwargs)
 
-        return loss
+        return item["loss"]
 
     def validation_step(self, *args: Any, **kwargs: Any) -> dict[str, Tensor]:
         """Compute validation loss.
@@ -315,28 +312,40 @@ class MAETask(LightningModule):
         Args:
             batch: the output of your DataLoader
         """
-        _, aug, aug_shuffled, pred, mask = self.shared_step("val", *args, **kwargs)
+        item = self.shared_step("val", *args, **kwargs)
 
-        aug_patch = patchify(aug_shuffled, self.patch_size)
+        batch_idx = args[1]
+        if batch_idx > 0:
+            return {}
 
-        mask_expanded = (~mask.bool()).unsqueeze(-1).expand(aug_patch.shape)
-        masked_aug = torch.zeros_like(aug_patch, device=self.device)  # type: ignore
-        masked_aug[mask_expanded] = aug_patch[mask_expanded]
-
-        pred = unpatchify(pred, self.patch_size)
-        masked_aug = unpatchify(masked_aug, self.patch_size)
+        input, target, pred, mask = (
+            item["input"],
+            item["target"],
+            item["pred"],
+            item["mask"],
+        )
 
         if self.channel_wise:
-            aug = aug.view(self.batch_size, -1, self.crop_size, self.crop_size)
-            aug_shuffled = aug_shuffled.view(
-                self.batch_size, -1, self.crop_size, self.crop_size
-            )
-            masked_aug = masked_aug.view(
+            pred = pred.view(self.B * self.num_out_channels, self.num_patches, -1)
+            mask = mask.view(self.num_in_channels, -1).repeat(self.B, 1)
+
+        target_patch = patchify(input, self.patch_size)
+        mask_expanded = (~mask.bool()).unsqueeze(-1).expand(target_patch.shape)
+        masked_target = torch.zeros_like(target_patch, device=input.device)
+        masked_target[mask_expanded] = target_patch[mask_expanded]
+
+        pred = unpatchify(pred, self.patch_size)
+        masked_target = unpatchify(masked_target, self.patch_size)
+
+        if self.channel_wise:
+            target = target.view(self.batch_size, -1, self.crop_size, self.crop_size)
+            input = input.view(self.batch_size, -1, self.crop_size, self.crop_size)
+            masked_target = masked_target.view(
                 self.batch_size, -1, self.crop_size, self.crop_size
             )
             pred = pred.view(self.batch_size, -1, self.crop_size, self.crop_size)
 
-        images = self.pad_image_dims(aug_shuffled, masked_aug, aug, pred)
+        images = self.pad_image_dims(input, masked_target, target, pred)
 
         return {"images": images}
 

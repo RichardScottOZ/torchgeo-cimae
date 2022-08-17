@@ -187,10 +187,10 @@ class MaskedEncoderViT(Module):
     def reduce_embed_token(
         self, x: Tensor, mask: Tensor, embed_token: Tensor
     ) -> tuple[Tensor, Tensor]:
-        """Reduce the embed token by using the values not masked by the mask in place."""
+        """Reduce the embed token by using the values not masked in place."""
         x = torch.cat((x, embed_token), dim=1)
 
-        mask = mask.view(-1, self.num_patches)
+        mask = mask.view(-1, self.num_patches)  # (C, P)
         visible_mask = torch.zeros(
             1, self.num_patches, device=x.device, dtype=torch.bool
         )
@@ -211,20 +211,20 @@ class MaskedEncoderViT(Module):
 
         return x, embed_token
 
-    def forward(
-        self, x: Tensor, mask: Tensor | None = None, channels: list[int] = []
-    ) -> Tensor:
+    def forward(self, item: dict[str, Tensor]) -> Tensor:
         """Forward pass of the model."""
-        x = self.embed_module(x, channels)
+        x = self.embed_module(item["input"], item["encoder_channels"])
+        mask = item.get("mask", None)
 
         if mask is not None and not self.embed_token_reduction:
             x = x[:, ~mask]
 
-        if self.embed_token is not None:
+        if self.embed_token is not None and (
+            mask is not None or not self.embed_token_reduction
+        ):
             B, *_ = x.shape
             embed_token = self.embed_token.repeat(B, 1, 1)
 
-            # TODO: CURRENT -> Check at inference without mask
             if self.embed_token_reduction and mask is not None:
                 x, embed_token = self.reduce_embed_token(x, mask, embed_token)
 
@@ -236,7 +236,7 @@ class MaskedEncoderViT(Module):
         if self.embed_token is not None:
             x = x[:, : self.num_patches]
 
-        return x
+        return cast(Tensor, x)
 
 
 class DecoderEmbedding(Module):
@@ -344,22 +344,18 @@ class MaskedDecoderViT(Module):
 
         self.apply(_init_weights)
 
-    def forward(
-        self, x: Tensor, mask: Tensor | None = None, channels: list[int] = []
-    ) -> Tensor:
+    def forward(self, item: dict[str, Tensor]) -> Tensor:
         """Forward pass of the model."""
         output = []
-        xx = x.clone()
-
-        for channel in channels:
-            x = self.embed_module(xx, mask, [channel])
+        for channel in item["decoder_channels"]:
+            x = self.embed_module(item["latent"].clone(), item["mask"], [channel])
 
             x = self.decoder(x)
             x = self.norm(x)
 
             x = self.predictor(x)
 
-            output.append(x)
+            output.append(x.clone())
 
         x = torch.stack(output, dim=1).flatten(1, 2)
 
@@ -419,18 +415,12 @@ class MaskedAutoencoderViT(Module):
             dropout_attn=decoder_dropout_attn,
         )
 
-    def forward(
-        self,
-        x: Tensor,
-        mask: Tensor | None = None,
-        encoder_channels: list[int] = [],
-        decoder_channels: list[int] = [],
-    ) -> Tensor | tuple[Tensor, Tensor]:
+    def forward(self, item: dict[str, Tensor]) -> dict[str, Tensor]:
         """Forward pass of the model."""
-        latent = self.encoder(x, mask, encoder_channels)
-        pred = self.decoder(latent, mask, decoder_channels)
+        item["latent"] = self.encoder(item)
+        item["pred"] = self.decoder(item)
 
-        return cast(Tensor, pred)
+        return item
 
 
 class MaskedViT(Module):

@@ -267,7 +267,9 @@ class EmbeddingEvaluator(LightningModule):
         if self.channel_wise:
             x = x.flatten(0, 1).unsqueeze(1)  # Reorder per channel
 
-        embeddings: Tensor = self.encoder(x, channels=[0, 1, 2, 3])
+        item = {"input": x, "encoder_channels": [0, 1, 2, 3]}
+
+        embeddings: Tensor = self.encoder(item)
         if isinstance(embeddings, Sequence):
             embeddings = embeddings[0]
         embeddings = embeddings.reshape(B, -1)
