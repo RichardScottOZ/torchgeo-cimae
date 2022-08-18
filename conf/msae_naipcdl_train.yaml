@@ -1,6 +1,6 @@
 trainer:
-  gpus: [0]
-  max_epochs: 500
+  gpus: [1]
+  max_epochs: 100
   precision: 32
   benchmark: True
 experiment:
@@ -18,19 +18,24 @@ experiment:
     image_size: 256
     crop_size: 224
     patch_size: 16
-    embed_dim: 1024
+    batch_size: 64
+    channel_wise: True
+    channel_shuffle: True
+    embed_token: True
+    embed_token_reduction: True
+    embed_dim: 512
     depth: 6
     num_heads: 1
-    decoder_depth: 2
+    decoder_depth: 1
     decoder_num_heads: 1
-    decoder_embed_dim: 512
+    decoder_embed_dim: 256
   datamodule:
     naip_root_dir: "/data/users/mike/data/NAIP"
     batch_size: 64
-    train_length: 10000 #0
-    val_length: 1500 #0
+    train_length: 50000 #0
+    val_length: 3000 #0
     num_workers: 8
-    patch_size: 256
+    patch_size: 240
     dataset_split: "roi_split_grid"
     number_of_cells: 12
     area_of_interest:
