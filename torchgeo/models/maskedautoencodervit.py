@@ -39,6 +39,22 @@ def get_positional_encodings(
     return Parameter(positional_embeddings, requires_grad=False)
 
 
+@lru_cache(128)
+def get_channel_encodings(
+    channels: tuple[int], num_patches: int, embed_size: int, device: str | torch.device
+) -> Tensor:
+    """Get the channel encodings for the given channels."""
+    channel_encoding = get_1d_sincos_pos_embed_from_grid(
+        embed_size,
+        torch.tensor(channels, dtype=torch.float, device=device),
+        device=device,
+    )
+
+    channel_encoding = channel_encoding.repeat_interleave(repeats=num_patches, dim=0)
+
+    return channel_encoding
+
+
 class TransformerEncoder(Module):
     """TransformerEncoder."""
 
@@ -101,23 +117,6 @@ class EncoderEmbedding(Module):
         w = self.embedder.weight.data
         init.xavier_uniform_(w.view([w.shape[0], -1]))
 
-    @lru_cache(128)
-    def get_channel_encodings(
-        self, channels: tuple[int], embed_size: int, device: str | torch.device
-    ) -> Tensor:
-        """Get the channel encodings for the given channels."""
-        channel_encoding = get_1d_sincos_pos_embed_from_grid(
-            embed_size,
-            torch.tensor(channels, dtype=torch.float, device=device),
-            device=device,
-        )
-
-        channel_encoding = channel_encoding.repeat_interleave(
-            repeats=self.num_patches, dim=0
-        )
-
-        return channel_encoding
-
     def forward(self, x: Tensor, channels: list[int] = []) -> Tensor:
         """Forward pass of the encoder embedding module.
 
@@ -134,7 +133,9 @@ class EncoderEmbedding(Module):
 
         if len(channels):
             x = x.reshape(-1, len(channels) * PW**2, H)
-            x += self.get_channel_encodings(tuple(channels), x.shape[-1], x.device)
+            x += get_channel_encodings(
+                tuple(channels), self.num_patches, x.shape[-1], x.device
+            )
 
         return x
 
@@ -188,7 +189,6 @@ class MaskedEncoderViT(Module):
         self, x: Tensor, mask: Tensor, embed_token: Tensor
     ) -> tuple[Tensor, Tensor]:
         """Reduce the embed token by using the values not masked in place."""
-        x = torch.cat((x, embed_token), dim=1)
 
         mask = mask.view(-1, self.num_patches)  # (C, P)
         visible_mask = torch.zeros(
@@ -200,12 +200,12 @@ class MaskedEncoderViT(Module):
         selection_mask *= self.num_patches
         selection_mask += torch.arange(self.num_patches, device=x.device)
 
-        embed_token = x[:, selection_mask]
-
         mask = mask.flatten()
         mask[selection_mask] = True
         mask = mask[: -self.num_patches]
 
+        x = torch.cat((x, embed_token), dim=1)
+        embed_token = x[:, selection_mask]
         x = x[:, : -self.num_patches]
         x = x[:, ~mask]
 
@@ -213,6 +213,7 @@ class MaskedEncoderViT(Module):
 
     def forward(self, item: dict[str, Tensor]) -> Tensor:
         """Forward pass of the model."""
+        item["encoder_channels"] = [channel + 1 for channel in item["encoder_channels"]]
         x = self.embed_module(item["input"], item["encoder_channels"])
         mask = item.get("mask", None)
 
@@ -225,9 +226,12 @@ class MaskedEncoderViT(Module):
             B, *_ = x.shape
             embed_token = self.embed_token.repeat(B, 1, 1)
 
-            if self.embed_token_reduction and mask is not None:
+            if mask is not None and self.embed_token_reduction:
                 x, embed_token = self.reduce_embed_token(x, mask, embed_token)
 
+            embed_token += get_channel_encodings(
+                (0), self.num_patches, embed_token.shape[-1], x.device
+            )
             x = torch.cat([embed_token, x], dim=1)
 
         x = self.encoder(x)
@@ -262,22 +266,6 @@ class DecoderEmbedding(Module):
 
         self.apply(_init_weights)
 
-    @lru_cache(128)
-    def get_channel_encodings(
-        self, channels: tuple[int], embed_size: int, device: str | torch.device
-    ) -> Tensor:
-        """Get the channel encodings for a given channel."""
-        channel_encoding = get_1d_sincos_pos_embed_from_grid(
-            embed_size,
-            torch.tensor(channels, dtype=torch.float, device=device),
-            device=device,
-        )
-        channel_encoding = channel_encoding.repeat_interleave(
-            repeats=self.num_patches, dim=0
-        )
-
-        return channel_encoding
-
     def select_from_mask(self, x: Tensor, mask: Tensor, channels: list[int]) -> Tensor:
         """Select the elements given a mask."""
         B, _, _ = x.shape
@@ -307,7 +295,9 @@ class DecoderEmbedding(Module):
         x += self.positional_encodings.repeat(len(channels) or 1, 1)
 
         if len(channels):
-            x += self.get_channel_encodings(tuple(channels), x.shape[-1], x.device)
+            x += get_channel_encodings(
+                tuple(channels), self.num_patches, x.shape[-1], x.device
+            )
 
         return x
 
@@ -359,7 +349,7 @@ class MaskedDecoderViT(Module):
 
         x = torch.stack(output, dim=1).flatten(1, 2)
 
-        return x
+        return cast(Tensor, x)
 
 
 class MaskedAutoencoderViT(Module):
