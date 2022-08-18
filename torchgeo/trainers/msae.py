@@ -80,9 +80,11 @@ class Augmentations(Module):
         super().__init__()
 
         crop_size = crop_size or image_size
-        rotations = [0.0, 90.0, 180.0, 270.0]
         self.patch_size = patch_size
         scale = _to_tuple(scale)
+
+        self.rotation: dict[str, int] = {"transform": -1, "transform_prime": -1}
+        self.flip: dict[str, bool] = {"transform": False, "transform_prime": False}
 
         self.augmentation = {
             "train": Sequential(
@@ -90,30 +92,6 @@ class Augmentations(Module):
                 K.RandomResizedCrop(
                     size=crop_size, scale=scale, align_corners=False, resample="BICUBIC"
                 ),
-            ),
-            "transform": K.AugmentationSequential(
-                K.RandomHorizontalFlip(),
-                K.ImageSequential(
-                    *[
-                        K.RandomRotation([rotation, rotation], p=1.0)
-                        for rotation in rotations
-                    ],
-                    random_apply=1,
-                ),
-                data_keys=["input", "mask"],
-                same_on_batch=True,
-            ),
-            "transform_prime": K.AugmentationSequential(
-                K.RandomHorizontalFlip(),
-                K.ImageSequential(
-                    *[
-                        K.RandomRotation([rotation, rotation], p=1.0)
-                        for rotation in rotations
-                    ],
-                    random_apply=1,
-                ),
-                data_keys=["input", "mask"],
-                same_on_batch=True,
             ),
             "val": Sequential(
                 K.Resize(size=image_size, align_corners=False),
@@ -136,12 +114,23 @@ class Augmentations(Module):
             return cast(Tensor, self.augmentation["train"](x))
 
         if "transform" in stage and mask is not None:
-            B, C, *_ = x.shape
+            _, C, *_ = x.shape
             P = len(mask)
             side = int((P // C) ** 0.5)
-            mask = mask.view(1, C, side, side).repeat(B, 1, 1, 1).float()
-            x, mask = self.augmentation[stage](x, mask)
-            mask = mask.view(B, -1)[0].round().bool()  # type: ignore
+            mask = mask.view(1, C, side, side)
+
+            self.rotation[stage] = int(
+                torch.randint(0, 4, (1,), device=x.device).item()
+            )
+            x = torch.rot90(x, self.rotation[stage], [-2, -1])
+            mask = torch.rot90(mask, self.rotation[stage], [-2, -1])
+
+            self.flip[stage] = bool((torch.rand(1) > 0.5).item())
+            if self.flip[stage]:
+                x = x.flip(-1)
+                mask = mask.flip(-1)
+
+            mask = mask[0].flatten()
 
             return x, mask
 
@@ -167,9 +156,12 @@ class Augmentations(Module):
         _, _, H, W = pred.shape
         pred = pred.view(B, -1, H, W)
 
-        pred, latent = self.augmentation[stage].inverse(
-            pred, latent, data_keys=["input", "input"]
-        )
+        pred = torch.rot90(pred, -self.rotation[stage], [-2, -1])
+        latent = torch.rot90(latent, -self.rotation[stage], [-2, -1])
+
+        if self.flip[stage]:
+            pred = torch.flip(pred, [-1])
+            latent = torch.flip(latent, [-1])
 
         pred = pred.flatten(0, 1).unsqueeze(1)
         item["pred"] = patchify(pred, self.patch_size).view(B, -1, PS)
@@ -308,10 +300,9 @@ class MSAETask(LightningModule):
 
         with torch.no_grad():
             target = self.augment(x, stage)
-            mask = self.generate_mask(self.C, self.num_patches, x.device)
 
-            item1 = self.get_item(target, mask, "transform", self.C)
-            item2 = self.get_item(target, mask, "transform_prime", self.C)
+            item1 = self.get_item(target, "transform", self.C)
+            item2 = self.get_item(target, "transform_prime", self.C)
 
         item1 = self.forward(item1)
         item2 = self.forward(item2)
@@ -343,10 +334,11 @@ class MSAETask(LightningModule):
         return {"loss": loss, "item1": item1, "item2": item2}
 
     def get_item(
-        self, target: Tensor, mask: Tensor, transform_stage: str, C: int
+        self, target: Tensor, transform_stage: str, C: int
     ) -> dict[str, Tensor]:
         """Get the item for the given transform stage."""
         input = target.clone()
+        mask = self.generate_mask(self.C, self.num_patches, input.device)
         mask_target = mask
 
         encoder_channels = torch.randperm(C, device=target.device).tolist()
@@ -397,7 +389,7 @@ class MSAETask(LightningModule):
         """
         output = self.shared_step("train", *args, **kwargs)
 
-        return output["loss"]
+        return cast(Tensor, output["loss"])
 
     def validation_step(self, *args: Any, **kwargs: Any) -> dict[str, Tensor]:
         """Compute validation loss.
@@ -446,9 +438,7 @@ class MSAETask(LightningModule):
 
         target = target.view(self.B, -1, self.crop_size, self.crop_size)
         input = input.view(self.B, -1, self.crop_size, self.crop_size)
-        masked_target = masked_target.view(
-            self.B, -1, self.crop_size, self.crop_size
-        )
+        masked_target = masked_target.view(self.B, -1, self.crop_size, self.crop_size)
         pred = pred.view(self.B, -1, self.crop_size, self.crop_size)
 
         return torch.stack([input, masked_target, target, pred])
