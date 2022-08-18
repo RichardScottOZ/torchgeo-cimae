@@ -143,10 +143,8 @@ class MAETask(LightningModule):
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
-                "focal_mask_ratio": 0.3,
-                "focal_mask_probability": 0.0,
-                "num_patches": (self.crop_size // self.patch_size) ** 2,
-                "random_mask_ratio": 0.7,
+                "num_patches": self.num_patches,
+                "random_mask_ratio": 0.8,
                 "random_mask_probability": 1.0,
             },
         )
@@ -187,7 +185,7 @@ class MAETask(LightningModule):
         """
         optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "AdamW"))
         lr = self.hyperparams.get("lr", 1e-3)
-        actual_lr = lr * self.batch_size / 256
+        actual_lr = lr * self.B / 256
         weight_decay = self.hyperparams.get("weight_decay", 0.05)
         betas = self.hyperparams.get("betas", (0.9, 0.95))
         optimizer = optimizer_class(
@@ -338,12 +336,12 @@ class MAETask(LightningModule):
         masked_target = unpatchify(masked_target, self.patch_size)
 
         if self.channel_wise:
-            target = target.view(self.batch_size, -1, self.crop_size, self.crop_size)
-            input = input.view(self.batch_size, -1, self.crop_size, self.crop_size)
+            target = target.view(self.B, -1, self.crop_size, self.crop_size)
+            input = input.view(self.B, -1, self.crop_size, self.crop_size)
             masked_target = masked_target.view(
-                self.batch_size, -1, self.crop_size, self.crop_size
+                self.B, -1, self.crop_size, self.crop_size
             )
-            pred = pred.view(self.batch_size, -1, self.crop_size, self.crop_size)
+            pred = pred.view(self.B, -1, self.crop_size, self.crop_size)
 
         images = self.pad_image_dims(input, masked_target, target, pred)
 
