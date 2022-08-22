@@ -4,6 +4,7 @@ from os.path import isfile
 from typing import Any, Dict, Optional, Sequence, Tuple, cast
 
 import torch
+import wandb
 from kornia import augmentation as K
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
@@ -13,6 +14,7 @@ from torchmetrics import Accuracy, FBetaScore, JaccardIndex, MetricCollection
 
 from ..utils import _to_tuple
 from .byol import BYOLTask
+from .cae import CAETask
 from .mae import MAETask
 from .msae import MSAETask
 from .msn import MSNTask
@@ -75,9 +77,16 @@ class EmbeddingEvaluator(LightningModule):
         """Configures the task based on kwargs parameters passed to the constructor."""
         """Configures the task based on kwargs parameters passed to the constructor."""
         self.channel_wise = self.hyperparams.get("channel_wise", False)
+        self.in_channels = self.hyperparams.get("in_channels", 4)
+        self.out_channels = self.hyperparams.get("out_channels", self.in_channels)
+        self.mean_patches = self.hyperparams.get("mean_patches", False)
+        self.patch_size = self.hyperparams.get("patch_size", 16)
+
+        image_size = _to_tuple(self.hyperparams["image_size"])
+        crop_size = _to_tuple(self.hyperparams.get("crop_size", image_size))
+        num_classes = self.hyperparams["num_classes"]
 
         self.projector: Optional[Module] = None
-
         if self.hyperparams["task_name"] == "tile2vec":
             if "checkpoint_path" in self.hyperparams and isfile(
                 self.hyperparams["checkpoint_path"]
@@ -127,6 +136,16 @@ class EmbeddingEvaluator(LightningModule):
                 task = MAETask(**self.hyperparams)
             task.freeze()
             self.encoder = task.model.encoder
+        elif self.hyperparams["task_name"] == "cae":
+            if "checkpoint_path" in self.hyperparams and isfile(
+                self.hyperparams["checkpoint_path"]
+            ):
+                task = CAETask.load_from_checkpoint(self.hyperparams["checkpoint_path"])
+                print(f"Loaded from checkpoint: {self.hyperparams['checkpoint_path']}")
+            else:
+                task = CAETask(**self.hyperparams)
+            task.freeze()
+            self.encoder = task.model.encoder
         elif self.hyperparams["task_name"] == "msn":
             if "checkpoint_path" in self.hyperparams and isfile(
                 self.hyperparams["checkpoint_path"]
@@ -156,14 +175,6 @@ class EmbeddingEvaluator(LightningModule):
                 f"Task type '{self.hyperparams['task_name']}' is not valid."
             )
 
-        image_size = self.hyperparams["image_size"]
-        crop_size = self.hyperparams.get("crop_size", image_size)
-
-        image_size = _to_tuple(image_size)
-        crop_size = _to_tuple(crop_size)
-
-        self.in_channels = self.hyperparams.get("in_channels", 4)
-        self.out_channels = self.hyperparams.get("out_channels", self.in_channels)
         output = self.get_embeddings(
             torch.zeros((2, self.in_channels, crop_size[0], crop_size[1]))
         )
@@ -175,9 +186,6 @@ class EmbeddingEvaluator(LightningModule):
             output = self.projector(output)
 
         out_dim = output.shape[1]
-        num_classes = self.hyperparams["num_classes"]
-        self.mean_patches = self.hyperparams.get("mean_patches", False)
-        self.patch_size = self.hyperparams.get("patch_size", 16)
 
         if self.mean_patches:
             self.num_patches = (crop_size[0] // self.patch_size) * (
@@ -267,6 +275,7 @@ class EmbeddingEvaluator(LightningModule):
         if self.channel_wise:
             x = x.flatten(0, 1).unsqueeze(1)  # Reorder per channel
 
+        # TODO: Change
         item = {"input": x, "encoder_channels": [0, 1, 2, 3]}
 
         embeddings: Tensor = self.encoder(item)
@@ -327,10 +336,10 @@ class EmbeddingEvaluator(LightningModule):
         aug = self.augment(x, "val")
         embeddings = self.get_embeddings(aug)
 
-        metrics_classification = self.evaluate_classification(embeddings, y, "val")
-        self.log_dict(
-            metrics_classification, on_step=True, on_epoch=True, batch_size=x.shape[0]
-        )
+        metrics = self.evaluate_classification(embeddings, y, "test")
+        self.log_dict(metrics, on_step=True, on_epoch=True, batch_size=x.shape[0])
+
+        return metrics
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """TODO: Docstring."""
@@ -341,20 +350,19 @@ class EmbeddingEvaluator(LightningModule):
         aug = self.augment(x, "val")
         embeddings = self.get_embeddings(aug)
 
-        metrics_classification = self.evaluate_classification(embeddings, y, "test")
+        metrics = self.evaluate_classification(embeddings, y, "test")
+        self.log_dict(metrics, on_step=True, on_epoch=True, batch_size=x.shape[0])
 
-        self.log_dict(
-            metrics_classification, on_step=True, on_epoch=True, batch_size=x.shape[0]
-        )
+        if self.channel_wise:
+            metrics |= self.evaluate_dimensionality(embeddings)
 
-        return metrics_classification  # | metrics_dimensionality
+        return metrics
 
     def evaluate_classification(
         self, embeddings: Tensor, y: Tensor, stage: Optional[str] = None
     ) -> Dict[str, Tensor]:
         """TODO: Docstring."""
         y_hat = self.classify(embeddings)
-
         metrics = self.metrics(y_hat, y)
 
         if stage:
@@ -365,40 +373,38 @@ class EmbeddingEvaluator(LightningModule):
 
     def evaluate_dimensionality(self, embeddings: Tensor) -> Dict[str, Tensor]:
         """Evaluate the dimensionality of the embeddings using PCA."""
-        embeddings_normalized = torch.nn.functional.normalize(embeddings, dim=1)
+        B, *_ = embeddings.shape
+
+        embeddings = embeddings.view(B, self.num_patches, -1).flatten(0, 1)
+        embeddings_normalized = torch.nn.functional.normalize(embeddings, dim=-1)
         cov_embeddings = torch.cov(embeddings_normalized.T)
         svdvals_embeddings = torch.linalg.svdvals(cov_embeddings.float())
         svdvals_embeddings = svdvals_embeddings.log().sort(descending=True)[0]
 
-        metrics = {"svdvals_embeddings": svdvals_embeddings}
+        return {"svdvals_embeddings": svdvals_embeddings}
 
-        return metrics
+    def test_epoch_end(
+        self,
+        outputs: list[Tensor | Dict[str, Any]] | list[list[Tensor | Dict[str, Any]]],
+    ) -> None:
+        """TODO: Docstring."""
+        svdvals: list[Tensor] = []
 
-    # def test_epoch_end(
-    #     self,
-    #     outputs: Union[
-    #         List[Union[Tensor, Dict[str, Any]]],
-    #         List[List[Union[Tensor, Dict[str, Any]]]],
-    #     ],
-    # ) -> None:
-    #     """TODO: Docstring."""
-    #     svdvals: List[Tensor] = []
+        for output in cast(list[Dict[str, Tensor]], outputs):
+            svdvals_embeddings = output["svdvals_embeddings"]
+            svdvals.append(svdvals_embeddings)
 
-    #     for output in cast(List[Dict[str, Tensor]], outputs):
-    #         svdvals_embeddings = output["svdvals_embeddings"]
-    #         svdvals.append(svdvals_embeddings)
+        svdvals_mean = torch.stack(svdvals).mean(0)
 
-    #     svdvals_mean = torch.stack(svdvals).mean(0)
-
-    #     data = [[x, y] for (x, y) in zip(range(len(svdvals_mean)), svdvals_mean)]
-    #     table: wandb.data_types.Table = wandb.Table(data=data, columns=["Singular Value Rank Index", "Log of singular values"])  # type: ignore
-    #     wandb.log(
-    #         {
-    #             "singular_values_embeddings": wandb.plot.line(
-    #                 table,
-    #                 "Singular Value Rank Index",
-    #                 "Log of singular values",
-    #                 title="Singular Values of Embeddings",
-    #             )
-    #         }
-    #     )
+        data = [[x, y] for (x, y) in zip(range(len(svdvals_mean)), svdvals_mean)]
+        table: wandb.data_types.Table = wandb.Table(data=data, columns=["Singular Value Rank Index", "Log of singular values"])  # type: ignore
+        wandb.log(
+            {
+                "singular_values_embeddings": wandb.plot.line(
+                    table,
+                    "Singular Value Rank Index",
+                    "Log of singular values",
+                    title="Singular Values of Embeddings",
+                )
+            }
+        )

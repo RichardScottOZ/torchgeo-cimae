@@ -17,7 +17,7 @@ from torchvision.utils import make_grid
 
 from ..models import MaskedAutoencoderViT
 from ..utils import _to_tuple
-from .utils import focal_masking, patchify, random_masking, unpatchify
+from .utils import focal_masking, pad_imgs_dims, patchify, random_masking, unpatchify
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
@@ -30,18 +30,19 @@ MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
 
 
 def embedding_loss(
-    embedding1: Tensor, embedding2: Tensor, mean_patches: bool = True
+    latent1: Tensor, latent2: Tensor, mean_patches: bool = True
 ) -> Tensor:
     """Compute embedding loss."""
-    if not mean_patches:
-        return F.mse_loss(embedding1.mean(dim=1), embedding2.mean(dim=1))
+    if mean_patches:
+        return F.mse_loss(latent1.mean(dim=-1), latent2.mean(dim=-1))
 
-    return F.mse_loss(embedding1, embedding2)
+    return F.mse_loss(latent1, latent2)
 
 
-def masked_reconstruction_loss(item: dict[str, Tensor], patch_size: int) -> Tensor:
+def masked_reconstruction_loss(
+    target: Tensor, pred: Tensor, mask: Tensor, patch_size: int
+) -> Tensor:
     """Compute masked reconstruction loss."""
-    target, pred, mask = item["target"], item["pred"], item["mask_target"]
     B, *_ = pred.shape
 
     target = patchify(target, patch_size)
@@ -67,6 +68,7 @@ class Augmentations(Module):
         image_size: int | tuple[int, int] = (256, 256),
         crop_size: int | tuple[int, int] | None = None,
         patch_size: int = 16,
+        embed_dim: int | None = 512,
         scale: float | tuple[float, float] = (0.6, 1.0),
     ) -> None:
         """Initialize augmentations.
@@ -81,6 +83,9 @@ class Augmentations(Module):
 
         crop_size = crop_size or image_size
         self.patch_size = patch_size
+        self.embed_patch_size = (
+            int(embed_dim**0.5) if embed_dim is not None else self.patch_size
+        )
         scale = _to_tuple(scale)
 
         self.rotation: dict[str, int] = {"transform": -1, "transform_prime": -1}
@@ -115,22 +120,20 @@ class Augmentations(Module):
 
         if "transform" in stage and mask is not None:
             _, C, *_ = x.shape
-            P = len(mask)
+            P = mask.numel()
             side = int((P // C) ** 0.5)
-            mask = mask.view(1, C, side, side)
-
-            self.rotation[stage] = int(
-                torch.randint(0, 4, (1,), device=x.device).item()
-            )
-            x = torch.rot90(x, self.rotation[stage], [-2, -1])
-            mask = torch.rot90(mask, self.rotation[stage], [-2, -1])
+            mask = mask.view(C, side, side)
 
             self.flip[stage] = bool((torch.rand(1) > 0.5).item())
             if self.flip[stage]:
                 x = x.flip(-1)
                 mask = mask.flip(-1)
 
-            mask = mask[0].flatten()
+            self.rotation[stage] = int(torch.randint(0, 4, (1,)).item())
+            x = torch.rot90(x, self.rotation[stage], [-2, -1])
+            mask = torch.rot90(mask, self.rotation[stage], [-2, -1])
+
+            mask = mask.flatten()
 
             return x, mask
 
@@ -151,7 +154,7 @@ class Augmentations(Module):
         *_, PS = pred.shape
 
         pred = unpatchify(pred, self.patch_size)
-        latent = unpatchify(latent, self.patch_size)
+        latent = unpatchify(latent, self.embed_patch_size)
 
         _, _, H, W = pred.shape
         pred = pred.view(B, -1, H, W)
@@ -160,12 +163,12 @@ class Augmentations(Module):
         latent = torch.rot90(latent, -self.rotation[stage], [-2, -1])
 
         if self.flip[stage]:
-            pred = torch.flip(pred, [-1])
-            latent = torch.flip(latent, [-1])
+            pred = pred.flip(-1)
+            latent = latent.flip(-1)
 
         pred = pred.flatten(0, 1).unsqueeze(1)
         item["pred"] = patchify(pred, self.patch_size).view(B, -1, PS)
-        item["latent"] = patchify(latent, self.patch_size)
+        item["latent"] = patchify(latent, self.embed_patch_size)
 
         return item
 
@@ -178,12 +181,16 @@ class MSAETask(LightningModule):
         self.image_size = self.hyperparams.get("image_size", 256)
         self.crop_size = self.hyperparams.get("crop_size", 224)
         self.patch_size = self.hyperparams.get("patch_size", 16)
+        self.mean_patches = self.hyperparams.get("mean_patches", False)
         self.channel_wise = self.hyperparams.get("channel_wise", False)
         self.channel_shuffle = self.hyperparams.get("channel_shuffle", False)
+        self.embed_dim = self.hyperparams.get("embed_dim", 1024)
         self.embed_token = self.hyperparams.get("embed_token", False)
         self.embed_token_reduction = self.hyperparams.get(
             "embed_token_reduction", False
         )
+        self.num_in_channels = self.hyperparams.get("num_in_channels", 3)
+        self.num_out_channels = self.hyperparams.get("num_out_channels", 3)
         self.B = self.hyperparams.get("batch_size", 64)
         self.num_patches = (self.crop_size // self.patch_size) ** 2
 
@@ -195,16 +202,11 @@ class MSAETask(LightningModule):
             channel_wise=self.channel_wise,
             embed_token=self.embed_token,
             embed_token_reduction=self.embed_token_reduction,
-            embed_dim=self.hyperparams.get("embed_dim", 1024),
+            embed_dim=self.embed_dim,
             depth=self.hyperparams.get("depth", 24),
             num_heads=self.hyperparams.get("num_heads", 16),
             dropout_rate=self.hyperparams.get("dropout_rate", 0.0),
             dropout_attn=self.hyperparams.get("dropout_attn", 0.0),
-            decoder_embed_dim=self.hyperparams.get("decoder_embed_dim", 512),
-            decoder_depth=self.hyperparams.get("decoder_depth", 8),
-            decoder_num_heads=self.hyperparams.get("decoder_num_heads", 16),
-            decoder_dropout_rate=self.hyperparams.get("decoder_dropout_rate", 0.0),
-            decoder_dropout_attn=self.hyperparams.get("decoder_dropout_attn", 0.0),
         )
 
         self.mask_fn = self.hyperparams.get(
@@ -246,7 +248,9 @@ class MSAETask(LightningModule):
         image_size = _to_tuple(self.image_size)
         crop_size = _to_tuple(self.crop_size)
 
-        self.augment = Augmentations(image_size, crop_size)
+        self.augment = Augmentations(
+            image_size, crop_size, self.patch_size, self.embed_dim
+        )
 
     def configure_optimizers(self) -> dict[str, Any]:
         """Initialize the optimizer and learning rate scheduler.
@@ -301,56 +305,49 @@ class MSAETask(LightningModule):
         with torch.no_grad():
             target = self.augment(x, stage)
 
-            item1 = self.get_item(target, "transform", self.C)
-            item2 = self.get_item(target, "transform_prime", self.C)
+            item1 = self.get_item(target, "transform")
+            item2 = self.get_item(target, "transform_prime")
 
         item1 = self.forward(item1)
         item2 = self.forward(item2)
 
-        item1["pred"] = item1["pred"].view(self.B * self.C, self.num_patches, -1)
-        item2["pred"] = item2["pred"].view(self.B * self.C, self.num_patches, -1)
+        item1["pred"] = item1["pred"].view(
+            self.B * self.num_out_channels, self.num_patches, -1
+        )
+        item2["pred"] = item2["pred"].view(
+            self.B * self.num_out_channels, self.num_patches, -1
+        )
 
         # Restore transform augmentation for pred & latent
         item1 = self.augment.inverse(item1, "transform")
         item2 = self.augment.inverse(item2, "transform_prime")
 
         # Calculate losses
-        loss_rec1 = masked_reconstruction_loss(item1, self.patch_size)
-        loss_rec2 = masked_reconstruction_loss(item2, self.patch_size)
-        loss_embedding = embedding_loss(item1["latent"], item2["latent"])
-        loss = loss_embedding + (loss_rec1 + loss_rec2) / 2
+        losses = self.get_losses(item1, item1, stage)
+        self.log_dict(losses, on_step=stage != "val", on_epoch=True)
 
-        self.log_dict(
-            {
-                f"{stage}_loss": loss,
-                f"{stage}_loss_rec1": loss_rec1,
-                f"{stage}_loss_rec2": loss_rec2,
-                f"{stage}_loss_embedding": loss_embedding,
-            },
-            on_step=stage != "val",
-            on_epoch=True,
-        )
+        return {"loss": losses[f"{stage}_loss"], "item1": item1, "item2": item2}
 
-        return {"loss": loss, "item1": item1, "item2": item2}
-
-    def get_item(
-        self, target: Tensor, transform_stage: str, C: int
-    ) -> dict[str, Tensor]:
+    def get_item(self, target: Tensor, transform_stage: str) -> dict[str, Tensor]:
         """Get the item for the given transform stage."""
         input = target.clone()
-        mask = self.generate_mask(self.C, self.num_patches, input.device)
-        mask_target = mask
+        mask_input = self.generate_mask(self.C, self.num_patches, input.device)
+        mask_target = mask_input
 
-        encoder_channels = torch.randperm(C, device=target.device).tolist()
-        decoder_channels = torch.randperm(C, device=target.device).tolist()
+        encoder_channels = torch.randperm(self.C, device=target.device).tolist()[
+            : self.num_in_channels
+        ]
+        decoder_channels = torch.randperm(self.C, device=target.device).tolist()[
+            : self.num_out_channels
+        ]
 
         input = input[:, encoder_channels]
         target = target[:, decoder_channels]
 
-        mask_target = mask.view(C, -1)[decoder_channels].flatten()
-        mask = mask.view(C, -1)[encoder_channels].flatten()
+        mask_target = mask_input[decoder_channels].flatten()
+        mask_input = mask_input[encoder_channels].flatten()
 
-        input, mask = self.augment(input, transform_stage, mask)
+        input, mask_input = self.augment(input, transform_stage, mask_input)
 
         input = input.flatten(0, 1).unsqueeze(1)
         target = target.flatten(0, 1).unsqueeze(1)
@@ -358,7 +355,7 @@ class MSAETask(LightningModule):
         return {
             "input": input,
             "target": target,
-            "mask": mask,
+            "mask_input": mask_input,
             "mask_target": mask_target,
             "encoder_channels": encoder_channels,  # type: ignore
             "decoder_channels": decoder_channels,  # type: ignore
@@ -369,7 +366,8 @@ class MSAETask(LightningModule):
     ) -> Tensor:
         """Generate a mask of the image."""
         mask = torch.zeros(
-            num_patches if not self.channel_wise else num_patches * C,
+            1 if not self.channel_wise else C,
+            num_patches,
             device=device,
             dtype=torch.bool,
         )
@@ -377,6 +375,28 @@ class MSAETask(LightningModule):
             mask = MASKING_FUNCTIONS[masking_name](mask, **self.mask_kwargs)
 
         return mask
+
+    def get_losses(
+        self, item1: dict[str, Tensor], item2: dict[str, Tensor], stage: str | None
+    ) -> dict[str, Tensor]:
+        """Calculate the losses for the given stage."""
+        loss_rec1 = masked_reconstruction_loss(
+            item1["target"], item1["pred"], item1["mask_target"], self.patch_size
+        )
+        loss_rec2 = masked_reconstruction_loss(
+            item2["target"], item2["pred"], item2["mask_target"], self.patch_size
+        )
+        loss_embedding = embedding_loss(
+            item1["latent"], item2["latent"], self.mean_patches
+        )
+        loss = loss_embedding + (loss_rec1 + loss_rec2) / 2
+
+        return {
+            f"{stage}_loss": loss,
+            f"{stage}_loss_rec1": loss_rec1,
+            f"{stage}_loss_rec2": loss_rec2,
+            f"{stage}_loss_embedding": loss_embedding,
+        }
 
     def training_step(self, *args: Any, **kwargs: Any) -> Tensor:
         """Compute and return the training loss.
@@ -407,7 +427,7 @@ class MSAETask(LightningModule):
 
         return {"images1": images1, "images2": images2}
 
-    def prepare_output(self, item: dict[str, Tensor]) -> Tensor:
+    def prepare_output(self, item: dict[str, Tensor]) -> dict[str, Tensor]:
         """Prepare the output for logging.
 
         Args:
@@ -418,15 +438,16 @@ class MSAETask(LightningModule):
         Returns:
             output from the model
         """
-        input, target, pred, mask = (
+        input, target, pred, mask, latent = (
             item["input"],
             item["target"],
             item["pred"],
-            item["mask"],
+            item["mask_input"],
+            item["latent"],
         )
 
-        pred = pred.view(self.B * self.C, self.num_patches, -1)
-        mask = mask.view(self.C, -1).repeat(self.B, 1)
+        pred = pred.view(self.B * self.num_out_channels, self.num_patches, -1)
+        mask = mask.view(self.num_in_channels, -1).repeat(self.B, 1)
 
         target_patch = patchify(input, self.patch_size)
         mask_expanded = (~mask.bool()).unsqueeze(-1).expand(target_patch.shape)
@@ -435,13 +456,19 @@ class MSAETask(LightningModule):
 
         pred = unpatchify(pred, self.patch_size)
         masked_target = unpatchify(masked_target, self.patch_size)
+        latent = unpatchify(latent, int(self.embed_dim**0.5))
+
+        latent /= latent.amax()
+        pred /= pred.amax()
 
         target = target.view(self.B, -1, self.crop_size, self.crop_size)
         input = input.view(self.B, -1, self.crop_size, self.crop_size)
         masked_target = masked_target.view(self.B, -1, self.crop_size, self.crop_size)
         pred = pred.view(self.B, -1, self.crop_size, self.crop_size)
 
-        return torch.stack([input, masked_target, target, pred])
+        images = pad_imgs_dims([input, masked_target, pred, target], self.C)
+
+        return {"images": images, "latent": latent}
 
     def validation_epoch_end(
         self,
@@ -449,17 +476,28 @@ class MSAETask(LightningModule):
         | list[list[Tensor | dict[str, Any]]],
     ) -> None:
         """Log images."""
-        images1 = validation_step_outputs[0]["images1"]  # type: ignore
-        images2 = validation_step_outputs[0]["images2"]  # type: ignore
+        images1 = validation_step_outputs[0]["images1"]["images"]  # type: ignore
+        latent1 = validation_step_outputs[0]["images1"]["latent"]  # type: ignore
+
+        images2 = validation_step_outputs[0]["images2"]["images"]  # type: ignore
+        latent2 = validation_step_outputs[0]["images2"]["latent"]  # type: ignore
 
         grid1 = make_grid(images1[:, :8].flatten(0, 1)[:, :3], nrow=8)
         images1 = wandb.Image(grid1, caption="Images")
+        latent1 = latent1[:8].flatten(0, 1).unsqueeze(1)
+        latent_grid1 = make_grid(latent1)
+        latent_grid1 = wandb.Image(latent_grid1, caption="Latent")
 
         grid2 = make_grid(images2[:, :8].flatten(0, 1)[:, :3], nrow=8)
         images2 = wandb.Image(grid2, caption="Images")
+        latent2 = latent2[:8].flatten(0, 1).unsqueeze(1)
+        latent_grid2 = make_grid(latent2)
+        latent_grid2 = wandb.Image(latent_grid2, caption="Latent")
 
         wandb.log({"Images1": images1})
         wandb.log({"Images2": images2})
+        wandb.log({"Latent1": latent_grid1})
+        wandb.log({"Latent2": latent_grid2})
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """No-op, does nothing."""

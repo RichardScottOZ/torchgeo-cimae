@@ -193,6 +193,24 @@ def unpatchify(x: Tensor, patch_size: int, flat: bool = False) -> Tensor:
     return imgs
 
 
+def pad_imgs_dims(images: list[Tensor], pad_dim: int) -> Tensor:
+    """Pad the image dimensions to match."""
+    images = [pad_img_dims(image, pad_dim) for image in images]
+    return torch.stack(images, dim=0)
+
+
+def pad_img_dims(img: Tensor, pad_dim: int) -> Tensor:
+    """Pad the image dimensions to match the original dimensions."""
+    B, C, H, W = img.shape
+    if C == pad_dim:
+        return img
+
+    img_padded = torch.zeros((B, pad_dim, H, W), device=img.device)
+    img_padded[:, :C] = img
+
+    return img_padded
+
+
 def random_masking(
     mask: Tensor,
     random_mask_ratio: float,
@@ -207,6 +225,9 @@ def random_masking(
     if torch.rand(1) > random_mask_probability:
         return mask
 
+    C, PS = mask.shape
+    mask = mask.flatten()
+
     P = len(mask)
     num_removed = mask.sum()
     num_kept = P - num_removed
@@ -218,6 +239,7 @@ def random_masking(
     ids_remove = ids_kept.gather(dim=0, index=ids_shuffle[:len_remove]).flatten()
 
     mask.flatten()[ids_remove] = True
+    mask = mask.view(C, PS)
 
     return mask
 

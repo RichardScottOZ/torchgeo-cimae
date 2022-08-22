@@ -16,7 +16,7 @@ from torchvision.utils import make_grid
 
 from ..models import MaskedAutoencoderViT
 from ..utils import _to_tuple
-from .utils import focal_masking, patchify, random_masking, unpatchify
+from .utils import focal_masking, pad_imgs_dims, patchify, random_masking, unpatchify
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
@@ -110,10 +110,13 @@ class MAETask(LightningModule):
         self.patch_size = self.hyperparams.get("patch_size", 16)
         self.channel_wise = self.hyperparams.get("channel_wise", False)
         self.channel_shuffle = self.hyperparams.get("channel_shuffle", False)
+        self.embed_dim = self.hyperparams.get("embed_dim", 1024)
         self.embed_token = self.hyperparams.get("embed_token", False)
         self.embed_token_reduction = self.hyperparams.get(
             "embed_token_reduction", False
         )
+        self.num_in_channels = self.hyperparams.get("num_in_channels", 3)
+        self.num_out_channels = self.hyperparams.get("num_out_channels", 3)
         self.B = self.hyperparams.get("batch_size", 64)
         self.num_patches = (self.crop_size // self.patch_size) ** 2
 
@@ -125,21 +128,14 @@ class MAETask(LightningModule):
             channel_wise=self.channel_wise,
             embed_token=self.embed_token,
             embed_token_reduction=self.embed_token_reduction,
-            embed_dim=self.hyperparams.get("embed_dim", 1024),
+            embed_dim=self.embed_dim,
             depth=self.hyperparams.get("depth", 24),
             num_heads=self.hyperparams.get("num_heads", 16),
             dropout_rate=self.hyperparams.get("dropout_rate", 0.0),
             dropout_attn=self.hyperparams.get("dropout_attn", 0.0),
-            decoder_embed_dim=self.hyperparams.get("decoder_embed_dim", 512),
-            decoder_depth=self.hyperparams.get("decoder_depth", 8),
-            decoder_num_heads=self.hyperparams.get("decoder_num_heads", 16),
-            decoder_dropout_rate=self.hyperparams.get("decoder_dropout_rate", 0.0),
-            decoder_dropout_attn=self.hyperparams.get("decoder_dropout_attn", 0.0),
         )
 
-        self.mask_fn = self.hyperparams.get(
-            "mask_fn", ["random_masking"]  # ["focal_masking", "random_masking"]
-        )
+        self.mask_fn = self.hyperparams.get("mask_fn", ["random_masking"])
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
@@ -235,9 +231,6 @@ class MAETask(LightningModule):
             encoder_channels = decoder_channels = []
 
             if self.channel_shuffle:
-                self.num_in_channels = self.C
-                self.num_out_channels = self.C
-
                 encoder_channels = torch.randperm(self.C, device=x.device).tolist()[
                     : self.num_in_channels
                 ]
@@ -248,8 +241,8 @@ class MAETask(LightningModule):
                 input = input[:, encoder_channels]
                 target = target[:, decoder_channels]
 
-                mask_target = mask.view(self.C, -1)[decoder_channels].flatten()
-                mask = mask.view(self.C, -1)[encoder_channels].flatten()
+                mask_target = mask[decoder_channels].flatten()
+                mask = mask[encoder_channels].flatten()
 
             if self.channel_wise:
                 if not self.channel_shuffle:
@@ -282,7 +275,8 @@ class MAETask(LightningModule):
     ) -> Tensor:
         """Generate a mask of the image."""
         mask = torch.zeros(
-            num_patches if not self.channel_wise else num_patches * C,
+            1 if not self.channel_wise else C,
+            num_patches,
             device=device,
             dtype=torch.bool,
         )
@@ -316,11 +310,12 @@ class MAETask(LightningModule):
         if batch_idx > 0:
             return {}
 
-        input, target, pred, mask = (
+        input, target, pred, mask, latent = (
             item["input"],
             item["target"],
             item["pred"],
             item["mask"],
+            item["latent"],
         )
 
         if self.channel_wise:
@@ -334,6 +329,12 @@ class MAETask(LightningModule):
 
         pred = unpatchify(pred, self.patch_size)
         masked_target = unpatchify(masked_target, self.patch_size)
+        latent = unpatchify(latent, int(self.embed_dim**0.5))
+
+        latent -= latent.min()
+        latent /= latent.amax()
+        pred -= pred.min()
+        pred /= pred.amax()
 
         if self.channel_wise:
             target = target.view(self.B, -1, self.crop_size, self.crop_size)
@@ -343,29 +344,9 @@ class MAETask(LightningModule):
             )
             pred = pred.view(self.B, -1, self.crop_size, self.crop_size)
 
-        images = self.pad_image_dims(input, masked_target, target, pred)
+        images = pad_imgs_dims([input, masked_target, pred, target], self.C)
 
-        return {"images": images}
-
-    def pad_image_dims(
-        self, aug_shuffled: Tensor, masked_aug: Tensor, aug: Tensor, pred: Tensor
-    ) -> Tensor:
-        """Pad the image dimensions to match."""
-        B, _, H, W = aug.shape
-
-        black_img = torch.zeros((B, self.C, H, W), device=aug.device)
-
-        aug_shuffled_pad = black_img.clone()
-        aug_shuffled_pad[:, : self.num_in_channels] = aug_shuffled
-        masked_aug_pad = black_img.clone()
-        masked_aug_pad[:, : self.num_in_channels] = masked_aug
-
-        aug_pad = black_img.clone()
-        aug_pad[:, : self.num_out_channels] = aug
-        pred_pad = black_img.clone()
-        pred_pad[:, : self.num_out_channels] = pred
-
-        return torch.stack([aug_shuffled_pad, masked_aug_pad, aug_pad, pred_pad], dim=0)
+        return {"images": images, "latent": latent}
 
     def validation_epoch_end(
         self,
@@ -375,15 +356,18 @@ class MAETask(LightningModule):
         """Log images."""
         images = validation_step_outputs[0]["images"]  # type: ignore
 
-        if True:  #  self.channel_wise:
-            grid = make_grid(images[:, :8].flatten(0, 1)[:, :3])
-        else:
-            grid = make_grid(
-                images[:, :3].flatten(0, 1)[:, :3].flatten(0, 1).unsqueeze(1), nrow=9
-            )
+        grid = make_grid(images[:, :8].flatten(0, 1)[:, :3])
         images_grid = wandb.Image(grid, caption="Images")
 
         wandb.log({"Images": images_grid})
+
+        latent = validation_step_outputs[0]["latent"]  # type: ignore
+        latent = latent[:8].flatten(0, 1).unsqueeze(1)
+
+        latent_grid = make_grid(latent)
+        latent_grid = wandb.Image(latent_grid, caption="Latent")
+
+        wandb.log({"Latent": latent_grid})
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """No-op, does nothing."""
