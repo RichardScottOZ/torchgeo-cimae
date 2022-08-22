@@ -19,16 +19,21 @@ experiment:
     crop_size: 224
     patch_size: 16
     batch_size: 64
+    mean_patches: True
     channel_wise: True
     channel_shuffle: True
     embed_token: True
     embed_token_reduction: True
-    embed_dim: 512
+    num_in_channels: 3
+    num_out_channels: 3
+    embed_dim: 256
     depth: 6
     num_heads: 1
-    decoder_depth: 1
-    decoder_num_heads: 1
-    decoder_embed_dim: 256
+    mask_fn:
+      - "random_masking"
+    mask_kwargs:
+      random_mask_ratio: 0.7
+      random_mask_probability: 1.0
   datamodule:
     naip_root_dir: "/data/users/mike/data/NAIP"
     batch_size: 64

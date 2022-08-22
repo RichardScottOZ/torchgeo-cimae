@@ -37,7 +37,7 @@ experiment:
     val_length: 1250
     test_length: 10000
     num_workers: 8
-    patch_size: 240
+    patch_size: 256
     dataset_split: "roi_split_grid"
     number_of_cells: 12
     area_of_interest:
