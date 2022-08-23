@@ -29,9 +29,7 @@ MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
 }
 
 
-def embedding_loss(
-    latent1: Tensor, latent2: Tensor, mean_patches: bool = True
-) -> Tensor:
+def latent_loss(latent1: Tensor, latent2: Tensor, mean_patches: bool = True) -> Tensor:
     """Compute embedding loss."""
     if mean_patches:
         return F.mse_loss(latent1.mean(dim=-1), latent2.mean(dim=-1))
@@ -60,6 +58,19 @@ def masked_reconstruction_loss(
     return cast(Tensor, loss)
 
 
+def reconstruction_loss(target: Tensor, pred: Tensor, patch_size: int) -> Tensor:
+    """Compute masked reconstruction loss."""
+    B, *_ = pred.shape
+
+    target = patchify(target, patch_size)
+    target = target.view(pred.shape)
+
+    loss = (pred - target) ** 2
+    loss = loss.mean()  # [N, L], mean loss per patch
+
+    return cast(Tensor, loss)
+
+
 class Augmentations(Module):
     """A module for applying augmentations."""
 
@@ -84,12 +95,11 @@ class Augmentations(Module):
         crop_size = crop_size or image_size
         self.patch_size = patch_size
         self.embed_patch_size = (
-            int(embed_dim**0.5) if embed_dim is not None else self.patch_size
+            min(int(embed_dim**0.5), self.patch_size)
+            if embed_dim is not None
+            else self.patch_size
         )
         scale = _to_tuple(scale)
-
-        self.rotation: dict[str, int] = {"transform": -1, "transform_prime": -1}
-        self.flip: dict[str, bool] = {"transform": False, "transform_prime": False}
 
         self.augmentation = {
             "train": Sequential(
@@ -118,59 +128,7 @@ class Augmentations(Module):
         if stage is None:
             return cast(Tensor, self.augmentation["train"](x))
 
-        if "transform" in stage and mask is not None:
-            _, C, *_ = x.shape
-            P = mask.numel()
-            side = int((P // C) ** 0.5)
-            mask = mask.view(C, side, side)
-
-            self.flip[stage] = bool((torch.rand(1) > 0.5).item())
-            if self.flip[stage]:
-                x = x.flip(-1)
-                mask = mask.flip(-1)
-
-            self.rotation[stage] = int(torch.randint(0, 4, (1,)).item())
-            x = torch.rot90(x, self.rotation[stage], [-2, -1])
-            mask = torch.rot90(mask, self.rotation[stage], [-2, -1])
-
-            mask = mask.flatten()
-
-            return x, mask
-
         return cast(Tensor, self.augmentation[stage](x))
-
-    def inverse(self, item: dict[str, Tensor], stage: str) -> dict[str, Tensor]:
-        """Applys augmentations to the input tensor.
-
-        Args:
-            x: a batch of imagery
-
-        Returns:
-            an augmented batch of imagery
-        """
-        pred, latent = item["pred"], item["latent"]
-
-        B, *_ = latent.shape
-        *_, PS = pred.shape
-
-        pred = unpatchify(pred, self.patch_size)
-        latent = unpatchify(latent, self.embed_patch_size)
-
-        _, _, H, W = pred.shape
-        pred = pred.view(B, -1, H, W)
-
-        pred = torch.rot90(pred, -self.rotation[stage], [-2, -1])
-        latent = torch.rot90(latent, -self.rotation[stage], [-2, -1])
-
-        if self.flip[stage]:
-            pred = pred.flip(-1)
-            latent = latent.flip(-1)
-
-        pred = pred.flatten(0, 1).unsqueeze(1)
-        item["pred"] = patchify(pred, self.patch_size).view(B, -1, PS)
-        item["latent"] = patchify(latent, self.embed_patch_size)
-
-        return item
 
 
 class MSAETask(LightningModule):
@@ -311,20 +269,11 @@ class MSAETask(LightningModule):
         item1 = self.forward(item1)
         item2 = self.forward(item2)
 
-        item1["pred"] = item1["pred"].view(
-            self.B * self.num_out_channels, self.num_patches, -1
-        )
-        item2["pred"] = item2["pred"].view(
-            self.B * self.num_out_channels, self.num_patches, -1
-        )
-
-        # Restore transform augmentation for pred & latent
-        item1 = self.augment.inverse(item1, "transform")
-        item2 = self.augment.inverse(item2, "transform_prime")
-
         # Calculate losses
-        losses = self.get_losses(item1, item1, stage)
-        self.log_dict(losses, on_step=stage != "val", on_epoch=True)
+        losses = self.get_losses(item1, item2, stage)
+        self.log_dict(
+            losses, on_step=stage != "val", on_epoch=True, sync_dist=stage != "train"
+        )
 
         return {"loss": losses[f"{stage}_loss"], "item1": item1, "item2": item2}
 
@@ -332,7 +281,6 @@ class MSAETask(LightningModule):
         """Get the item for the given transform stage."""
         input = target.clone()
         mask_input = self.generate_mask(self.C, self.num_patches, input.device)
-        mask_target = mask_input
 
         encoder_channels = torch.randperm(self.C, device=target.device).tolist()[
             : self.num_in_channels
@@ -346,8 +294,6 @@ class MSAETask(LightningModule):
 
         mask_target = mask_input[decoder_channels].flatten()
         mask_input = mask_input[encoder_channels].flatten()
-
-        input, mask_input = self.augment(input, transform_stage, mask_input)
 
         input = input.flatten(0, 1).unsqueeze(1)
         target = target.flatten(0, 1).unsqueeze(1)
@@ -380,13 +326,9 @@ class MSAETask(LightningModule):
         self, item1: dict[str, Tensor], item2: dict[str, Tensor], stage: str | None
     ) -> dict[str, Tensor]:
         """Calculate the losses for the given stage."""
-        loss_rec1 = masked_reconstruction_loss(
-            item1["target"], item1["pred"], item1["mask_target"], self.patch_size
-        )
-        loss_rec2 = masked_reconstruction_loss(
-            item2["target"], item2["pred"], item2["mask_target"], self.patch_size
-        )
-        loss_embedding = embedding_loss(
+        loss_rec1 = reconstruction_loss(item1["target"], item1["pred"], self.patch_size)
+        loss_rec2 = reconstruction_loss(item2["target"], item2["pred"], self.patch_size)
+        loss_embedding = latent_loss(
             item1["latent"], item2["latent"], self.mean_patches
         )
         loss = loss_embedding + (loss_rec1 + loss_rec2) / 2
@@ -476,6 +418,9 @@ class MSAETask(LightningModule):
         | list[list[Tensor | dict[str, Any]]],
     ) -> None:
         """Log images."""
+        if self.device.index != 0:
+            return
+
         images1 = validation_step_outputs[0]["images1"]["images"]  # type: ignore
         latent1 = validation_step_outputs[0]["images1"]["latent"]  # type: ignore
 
