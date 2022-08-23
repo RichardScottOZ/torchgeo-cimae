@@ -336,7 +336,7 @@ class EmbeddingEvaluator(LightningModule):
         aug = self.augment(x, "val")
         embeddings = self.get_embeddings(aug)
 
-        metrics = self.evaluate_classification(embeddings, y, "test")
+        metrics = self.evaluate_classification(embeddings, y, "val")
         self.log_dict(metrics, on_step=True, on_epoch=True, batch_size=x.shape[0])
 
         return metrics
