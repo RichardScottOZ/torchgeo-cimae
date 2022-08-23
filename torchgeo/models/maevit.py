@@ -80,7 +80,7 @@ class TransformerEncoder(Module):
             )
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         """Forward pass."""
         return cast(Tensor, self.blocks(x))
 
