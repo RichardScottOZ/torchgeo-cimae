@@ -49,6 +49,19 @@ def masked_reconstruction_loss(
     return cast(Tensor, loss)
 
 
+def reconstruction_loss(target: Tensor, pred: Tensor, patch_size: int) -> Tensor:
+    """Compute masked reconstruction loss."""
+    B, *_ = pred.shape
+
+    target = patchify(target, patch_size)
+    target = target.view(pred.shape)
+
+    loss = (pred - target) ** 2
+    loss = loss.mean()  # [N, L], mean loss per patch
+
+    return cast(Tensor, loss)
+
+
 class Augmentations(Module):
     """A module for applying augmentations."""
 
@@ -262,9 +275,7 @@ class MAETask(LightningModule):
             }
 
         item = self.forward(item)
-        item["loss"] = masked_reconstruction_loss(
-            target, item["pred"], mask_target, self.patch_size
-        )
+        item["loss"] = reconstruction_loss(target, item["pred"], self.patch_size)
 
         self.log(f"{stage}_loss", item["loss"], on_step=stage != "val", on_epoch=True)
 
@@ -329,7 +340,7 @@ class MAETask(LightningModule):
 
         pred = unpatchify(pred, self.patch_size)
         masked_target = unpatchify(masked_target, self.patch_size)
-        latent = unpatchify(latent, int(self.embed_dim**0.5))
+        latent = unpatchify(latent, min(int(self.embed_dim**0.5), self.patch_size))
 
         latent -= latent.min()
         latent /= latent.amax()
