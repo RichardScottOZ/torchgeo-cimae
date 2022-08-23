@@ -231,7 +231,7 @@ def random_masking(
     P = len(mask)
     num_removed = mask.sum()
     num_kept = P - num_removed
-    len_remove = max(int(P * random_mask_ratio) - num_removed, 0)
+    len_remove = max(int(P * (1 - (1 - random_mask_ratio) / C)) - num_removed, 0)
 
     ids_kept = (~mask).flatten().argwhere().view(num_kept)
     noise = torch.rand(num_kept, device=mask.device)
