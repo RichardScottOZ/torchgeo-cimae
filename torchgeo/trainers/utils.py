@@ -5,7 +5,7 @@
 
 import warnings
 from collections import OrderedDict
-from typing import Any, Optional, Tuple, Union, cast
+from typing import Any, Optional, Tuple, Union, cast, Callable
 
 import torch
 import torch.nn as nn
@@ -213,7 +213,7 @@ def pad_img_dims(img: Tensor, pad_dim: int) -> Tensor:
 
 def random_masking(
     mask: Tensor,
-    random_mask_ratio: float,
+    random_mask_num_keep: float,
     random_mask_probability: float,
     **kwargs: Any,
 ) -> Tensor:
@@ -231,7 +231,7 @@ def random_masking(
     P = len(mask)
     num_removed = mask.sum()
     num_kept = P - num_removed
-    len_remove = max(int(P * (1 - (1 - random_mask_ratio) / C)) - num_removed, 0)
+    len_remove = max(num_kept - random_mask_num_keep, 0)
 
     ids_kept = (~mask).flatten().argwhere().view(num_kept)
     noise = torch.rand(num_kept, device=mask.device)
@@ -279,5 +279,25 @@ def focal_masking(
     focal_mask[:, low:high, low:high] = False
 
     mask |= focal_mask.view(B, P)
+
+    return mask
+
+
+MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {"random_masking": random_masking}
+
+
+def generate_mask(
+    mask_fns: list[str],
+    mask_kwargs: dict[str, Any],
+    num_patches: int,
+    C: int | None = None,
+    device: torch.device | str = "cpu",
+) -> Tensor:
+    """Generate a mask of the image."""
+    mask = torch.zeros(
+        1 if C is None else C, num_patches, device=device, dtype=torch.bool
+    )
+    for masking_name in mask_fns:
+        mask = MASKING_FUNCTIONS[masking_name](mask, **mask_kwargs)
 
     return mask

@@ -3,7 +3,7 @@
 # TODO: Attribution (Facebook)
 """MAE tasks."""
 
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import torch
 import wandb
@@ -16,16 +16,11 @@ from torchvision.utils import make_grid
 
 from ..models import MaskedAutoencoderViT
 from ..utils import _to_tuple
-from .utils import focal_masking, pad_imgs_dims, patchify, random_masking, unpatchify
+from .utils import pad_imgs_dims, patchify, unpatchify, generate_mask
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
 Module.__module__ = "torch.nn"
-
-MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
-    "focal_masking": focal_masking,
-    "random_masking": random_masking,
-}
 
 
 def masked_reconstruction_loss(
@@ -148,12 +143,12 @@ class MAETask(LightningModule):
             dropout_attn=self.hyperparams.get("dropout_attn", 0.0),
         )
 
-        self.mask_fn = self.hyperparams.get("mask_fn", ["random_masking"])
+        self.mask_fns = self.hyperparams.get("mask_fn", ["random_masking"])
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
                 "num_patches": self.num_patches,
-                "random_mask_ratio": 0.8,
+                "random_mask_num_keep": 256,
                 "random_mask_probability": 1.0,
             },
         )
@@ -237,7 +232,9 @@ class MAETask(LightningModule):
 
         with torch.no_grad():
             target = self.augment(x, stage)
-            mask = self.generate_mask(self.C, self.num_patches, x.device)
+        mask = generate_mask(
+            self.mask_fns, self.mask_kwargs, self.num_patches, self.C, x.device
+        )
 
             input = target.clone()
             mask_target = mask

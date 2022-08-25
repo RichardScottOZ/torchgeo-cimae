@@ -3,7 +3,7 @@
 
 """VICReg tasks."""
 
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import torch
 import torch.nn.functional as F
@@ -17,16 +17,11 @@ from torchvision.utils import make_grid
 
 from ..models import MaskedAutoencoderViT
 from ..utils import _to_tuple
-from .utils import focal_masking, pad_imgs_dims, patchify, random_masking, unpatchify
+from .utils import pad_imgs_dims, patchify, unpatchify, generate_mask
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
 Module.__module__ = "torch.nn"
-
-MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
-    "focal_masking": focal_masking,
-    "random_masking": random_masking,
-}
 
 
 def latent_loss(latent1: Tensor, latent2: Tensor, mean_patches: bool = True) -> Tensor:
@@ -167,18 +162,11 @@ class MSAETask(LightningModule):
             dropout_attn=self.hyperparams.get("dropout_attn", 0.0),
         )
 
-        self.mask_fn = self.hyperparams.get(
+        self.mask_fns = self.hyperparams.get(
             "mask_fn", ["random_masking"]  # ["focal_masking", "random_masking"]
         )
         self.mask_kwargs = self.hyperparams.get(
-            "mask_kwargs",
-            {
-                "focal_mask_ratio": 0.3,
-                "focal_mask_probability": 0.0,
-                "num_patches": (self.crop_size // self.patch_size) ** 2,
-                "random_mask_ratio": 0.7,
-                "random_mask_probability": 1.0,
-            },
+            "mask_kwargs", {"random_mask_num_keep": 256, "random_mask_probability": 1.0}
         )
 
     def __init__(self, **kwargs: Any) -> None:
@@ -280,7 +268,9 @@ class MSAETask(LightningModule):
     def get_item(self, target: Tensor, transform_stage: str) -> dict[str, Tensor]:
         """Get the item for the given transform stage."""
         input = target.clone()
-        mask_input = self.generate_mask(self.C, self.num_patches, input.device)
+        mask = generate_mask(
+            self.mask_fns, self.mask_kwargs, self.num_patches, self.C, input.device
+        )
 
         encoder_channels = torch.randperm(self.C, device=target.device).tolist()[
             : self.num_in_channels
