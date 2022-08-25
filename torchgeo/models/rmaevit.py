@@ -85,45 +85,6 @@ class TransformerEncoder(Module):
         return cast(Tensor, self.blocks(x))
 
 
-class TransformerEncoderWithConfidence(Module):
-    """TransformerEncoder."""
-
-    def __init__(
-        self,
-        embed_dim: int = 768,
-        depth: int = 12,
-        num_heads: int = 12,
-        dropout_rate: float = 0.0,
-        dropout_attn: float = 0.0,
-    ) -> None:
-        """Initialize a TransformerEncoder."""
-        super().__init__()
-        self.blocks = Sequential(
-            *(
-                TransformerEncoderBlock(
-                    embed_dim, num_heads, dropout_rate, dropout_attn
-                )
-                for _ in range(depth)
-            )
-        )
-        self.confidence_layers = Sequential(
-            *(Linear(embed_dim, 1) for _ in range(depth))
-        )
-
-    def forward(
-        self, x: Tensor, confidence: Tensor | None = None
-    ) -> tuple[Tensor, Tensor]:
-        """Forward pass."""
-        B, PS, _ = x.shape
-        confidence = confidence or torch.ones((B, PS, 1), device=x.device)
-
-        for block, confidence_layer in zip(self.blocks, self.confidence_layers):
-            x = block(x)
-            confidence *= torch.sigmoid(confidence_layer(x))
-
-        return x, confidence
-
-
 class EncoderEmbedding(Module):
     """Compute the 2d image patch embedding ready to pass to transformer encoder."""
 
