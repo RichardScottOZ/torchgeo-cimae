@@ -4,6 +4,7 @@
 """TorchGeo trainers."""
 
 from .byol import BYOLTask
+from .cae import CAETask
 from .classification import ClassificationTask, MultiLabelClassificationTask
 from .embedding_evaluation import EmbeddingEvaluator
 from .mae import MAETask
@@ -26,6 +27,7 @@ __all__ = (
     "MAETask",
     "MSNTask",
     "MSAETask",
+    "CAETask",
 )
 
 # https://stackoverflow.com/questions/40018681
