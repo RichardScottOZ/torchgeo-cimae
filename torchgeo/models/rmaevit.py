@@ -254,7 +254,7 @@ class MaskedEmbeddingExpander(Module):
             embed_dim, self.num_patches, channel_wise
         )
 
-        self.encoder = TransformerEncoderWithConfidence(
+        self.encoder = TransformerEncoder(
             embed_dim, depth, num_heads, dropout_rate, dropout_attn
         )
         self.norm = LayerNorm(embed_dim)
