@@ -224,5 +224,41 @@
             ],
             "justMyCode": true
         },
+        {
+            "name": "Python: cae_naipcdl_train",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/cae_naipcdl_train.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=False",
+                "logger.offline=True",
+                "trainer.gpus=[1]"
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: cae_naipcdl_evaluate",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/cae_naipcdl_evaluate.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "experiment.datamodule.naip_root_dir=/data/users/mike/data/NAIP",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=False",
+                "logger.offline=True",
+                "trainer.gpus=[0]",
+            ],
+            "justMyCode": true
+        },
     ]
 }

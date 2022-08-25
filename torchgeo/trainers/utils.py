@@ -202,7 +202,7 @@ def pad_imgs_dims(images: list[Tensor], pad_dim: int) -> Tensor:
 def pad_img_dims(img: Tensor, pad_dim: int) -> Tensor:
     """Pad the image dimensions to match the original dimensions."""
     B, C, H, W = img.shape
-    
+
     if C >= pad_dim:
         return img[:, :pad_dim]
 
@@ -213,17 +213,14 @@ def pad_img_dims(img: Tensor, pad_dim: int) -> Tensor:
 
 
 def random_masking(
-    mask: Tensor,
-    random_mask_num_keep: float,
-    random_mask_probability: float,
-    **kwargs: Any,
+    mask: Tensor, num_keep: int, probability: float, **kwargs: Any
 ) -> Tensor:
     """Perform per-sample random masking by per-sample shuffling.
 
     Per-sample shuffling is done by argsort random noise.
     x: [N, L, D], sequence
     """
-    if torch.rand(1) > random_mask_probability:
+    if torch.rand(1) > probability:
         return mask
 
     C, PS = mask.shape
@@ -232,7 +229,7 @@ def random_masking(
     P = len(mask)
     num_removed = mask.sum()
     num_kept = P - num_removed
-    len_remove = max(num_kept - random_mask_num_keep, 0)
+    len_remove = max(num_kept - num_keep, 0)
 
     ids_kept = (~mask).flatten().argwhere().view(num_kept)
     noise = torch.rand(num_kept, device=mask.device)
@@ -245,51 +242,72 @@ def random_masking(
     return mask
 
 
-# TODO: Rework
-def focal_masking(
-    masks: Tensor,
-    focal_mask_ratio: float,
-    focal_mask_probability: float,
-    num_patches: int | None = None,
-    **kwargs: Any,
-) -> Tensor:
-    """Perform focal masking."""
-    if num_patches is not None:
-        masks = []
-        for mask_split in mask.split(num_patches, dim=1):  # type: ignore
-            mask_split_focal = focal_masking(
-                mask_split, focal_mask_ratio, focal_mask_probability
-            )
-            masks.append(mask_split_focal)
-
-        return torch.cat(masks, dim=1)
-
-    if torch.rand(1) > focal_mask_probability:
+def random_masking_ratio(mask: Tensor, ratio: float, probability: float) -> Tensor:
+    """Perform per-sample random masking by per-sample shuffling."""
+    if torch.rand(1) > probability:
         return mask
 
-    B, P = mask.shape
-    focal_ratio = 1 - focal_mask_ratio
-    side = int(P**0.5)
+    _, PS = mask.shape
 
-    # Generate focal mask
-    center = side / 2
-    half_scaled = side // 2 * focal_ratio
-    low, high = round(center - half_scaled), round(center + half_scaled)
+    len_remove = max(int(PS * ratio), 0)
+    ids_kept = (~mask[0]).flatten().argwhere().view(PS)
+    noise = torch.rand(PS, device=mask.device)
+    ids_shuffle = torch.argsort(noise, dim=0)
+    ids_remove = ids_kept.gather(dim=0, index=ids_shuffle[:len_remove]).flatten()
 
-    focal_mask = torch.ones((B, side, side), device=mask.device, dtype=torch.bool)
-    focal_mask[:, low:high, low:high] = False
-
-    mask |= focal_mask.view(B, P)
+    mask[:, ids_remove] = True
 
     return mask
 
 
-MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {"random_masking": random_masking}
+# TODO: Rework
+# def focal_masking(
+#     masks: Tensor,
+#     focal_mask_ratio: float,
+#     focal_mask_probability: float,
+#     num_patches: int | None = None,
+#     **kwargs: Any,
+# ) -> Tensor:
+#     """Perform focal masking."""
+#     if num_patches is not None:
+#         masks = []
+#         for mask_split in mask.split(num_patches, dim=1):  # type: ignore
+#             mask_split_focal = focal_masking(
+#                 mask_split, focal_mask_ratio, focal_mask_probability
+#             )
+#             masks.append(mask_split_focal)
+
+#         return torch.cat(masks, dim=1)
+
+#     if torch.rand(1) > focal_mask_probability:
+#         return mask
+
+#     B, P = mask.shape
+#     focal_ratio = 1 - focal_mask_ratio
+#     side = int(P**0.5)
+
+#     # Generate focal mask
+#     center = side / 2
+#     half_scaled = side // 2 * focal_ratio
+#     low, high = round(center - half_scaled), round(center + half_scaled)
+
+#     focal_mask = torch.ones((B, side, side), device=mask.device, dtype=torch.bool)
+#     focal_mask[:, low:high, low:high] = False
+
+#     mask |= focal_mask.view(B, P)
+
+#     return mask
+
+
+MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
+    "random_masking": random_masking,
+    "random_masking_ratio": random_masking_ratio,
+}
 
 
 def generate_mask(
     mask_fns: list[str],
-    mask_kwargs: dict[str, Any],
+    mask_kwargs: dict[str, dict[str, Any]],
     num_patches: int,
     C: int | None = None,
     device: torch.device | str = "cpu",
@@ -299,6 +317,6 @@ def generate_mask(
         1 if C is None else C, num_patches, device=device, dtype=torch.bool
     )
     for masking_name in mask_fns:
-        mask = MASKING_FUNCTIONS[masking_name](mask, **mask_kwargs)
+        mask = MASKING_FUNCTIONS[masking_name](mask, **mask_kwargs[masking_name])
 
     return mask

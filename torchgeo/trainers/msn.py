@@ -15,14 +15,13 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from ..models import MaskedViT
 from ..utils import _to_tuple
-from .utils import focal_masking, random_masking
+from .utils import random_masking
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
 Module.__module__ = "torch.nn"
 
 MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
-    "focal_masking": focal_masking,
     "random_masking": random_masking,
 }
 

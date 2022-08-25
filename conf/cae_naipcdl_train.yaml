@@ -5,13 +5,13 @@ trainer:
   benchmark: True
   replace_sampler_ddp: False
 experiment:
-  task: "mae_naipcdl_train"
-  name: "mae_naipcdl_train"
+  task: "cae_naipcdl_train"
+  name: "cae_naipcdl_train"
   run:
     fit: True
     test: False
   module:
-    model: "mae"
+    model: "cae"
     encoder_name: "vit"
     sensor: "naip"
     imagenet_pretrained: False
@@ -27,11 +27,17 @@ experiment:
     num_in_channels: 4
     num_out_channels: 4
     embed_dim: 256
-    depth: 6
+    depth: 5
     num_heads: 1
+    expander_depth: 1
+    expander_num_heads: 1
     mask_fn:
+      - "random_masking_ratio"
       - "random_masking"
     mask_kwargs:
+      random_masking_ratio:
+        ratio: 0.4
+        probability: 1.0
       random_masking:
         num_keep: 256
         probability: 1.0

@@ -35,6 +35,7 @@ from torchgeo.datamodules import (
 )
 from torchgeo.trainers import (
     BYOLTask,
+    CAETask,
     ClassificationTask,
     EmbeddingEvaluator,
     MAETask,
@@ -79,6 +80,8 @@ TASK_TO_MODULES_MAPPING: Dict[
     "msn_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
     "msae_naipcdl_train": (MSAETask, NAIPCDLDataModule),
     "msae_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
+    "cae_naipcdl_train": (CAETask, NAIPCDLDataModule),
+    "cae_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
 }
 
 
@@ -280,7 +283,7 @@ def main(conf: DictConfig) -> None:
             strategy=DDPStrategy(find_unused_parameters=False, static_graph=True),
         )
     else:
-    trainer = Trainer(**trainer_args)
+        trainer = Trainer(**trainer_args)
 
     if trainer_args.get("auto_lr_find"):
         trainer.tune(model=task, datamodule=datamodule)
