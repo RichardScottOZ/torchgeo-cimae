@@ -192,7 +192,7 @@ class MAETask(LightningModule):
 
         optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "AdamW"))
         lr = self.hyperparams.get("lr", 1e-3)
-        actual_lr = lr * self.B / 256 * self.trainer.devices
+        actual_lr = lr * self.B / 256 * self.trainer.num_devices
         weight_decay = self.hyperparams.get("weight_decay", 0.05)
         betas = self.hyperparams.get("betas", (0.9, 0.95))
         optimizer = optimizer_class(

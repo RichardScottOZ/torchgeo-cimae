@@ -256,7 +256,7 @@ class EmbeddingEvaluator(LightningModule):
         """
         optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "SGD"))
         lr = self.hyperparams.get("lr", 2e-2)
-        actual_lr = lr * self.B / 256 * self.trainer.devices
+        actual_lr = lr * self.B / 256 * self.trainer.num_devices
         weight_decay = self.hyperparams.get("weight_decay", 1e-6)
         momentum = self.hyperparams.get("momentum", 0.9)
         optimizer = optimizer_class(
