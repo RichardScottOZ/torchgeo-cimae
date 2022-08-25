@@ -202,8 +202,9 @@ def pad_imgs_dims(images: list[Tensor], pad_dim: int) -> Tensor:
 def pad_img_dims(img: Tensor, pad_dim: int) -> Tensor:
     """Pad the image dimensions to match the original dimensions."""
     B, C, H, W = img.shape
-    if C == pad_dim:
-        return img
+    
+    if C >= pad_dim:
+        return img[:, :pad_dim]
 
     img_padded = torch.zeros((B, pad_dim, H, W), device=img.device)
     img_padded[:, :C] = img

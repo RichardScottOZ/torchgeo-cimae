@@ -81,6 +81,7 @@ class EmbeddingEvaluator(LightningModule):
         self.out_channels = self.hyperparams.get("out_channels", self.in_channels)
         self.mean_patches = self.hyperparams.get("mean_patches", False)
         self.patch_size = self.hyperparams.get("patch_size", 16)
+        self.B = self.hyperparams.get("batch_size", 256)
 
         image_size = _to_tuple(self.hyperparams["image_size"])
         crop_size = _to_tuple(self.hyperparams.get("crop_size", image_size))
@@ -255,10 +256,14 @@ class EmbeddingEvaluator(LightningModule):
         """
         optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "SGD"))
         lr = self.hyperparams.get("lr", 2e-2)
+        actual_lr = lr * self.B / 256 * self.trainer.devices
         weight_decay = self.hyperparams.get("weight_decay", 1e-6)
         momentum = self.hyperparams.get("momentum", 0.9)
         optimizer = optimizer_class(
-            self.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay
+            self.parameters(),
+            lr=actual_lr,
+            momentum=momentum,
+            weight_decay=weight_decay,
         )
 
         scheduler = CosineAnnealingLR(optimizer, T_max=self.trainer.max_epochs)  # type: ignore
@@ -337,7 +342,7 @@ class EmbeddingEvaluator(LightningModule):
         embeddings = self.get_embeddings(aug)
 
         metrics = self.evaluate_classification(embeddings, y, "val")
-        self.log_dict(metrics, on_step=True, on_epoch=True, batch_size=x.shape[0])
+        self.log_dict(metrics, on_step=False, on_epoch=True, batch_size=x.shape[0])
 
         return metrics
 
@@ -351,7 +356,7 @@ class EmbeddingEvaluator(LightningModule):
         embeddings = self.get_embeddings(aug)
 
         metrics = self.evaluate_classification(embeddings, y, "test")
-        self.log_dict(metrics, on_step=True, on_epoch=True, batch_size=x.shape[0])
+        self.log_dict(metrics, on_step=False, on_epoch=True, batch_size=x.shape[0])
 
         if self.channel_wise:
             metrics |= self.evaluate_dimensionality(embeddings)

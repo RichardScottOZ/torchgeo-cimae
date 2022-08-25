@@ -238,6 +238,7 @@ def main(conf: DictConfig) -> None:
         logger = pl_loggers.TensorBoardLogger(log_dir, name=experiment_name)
     elif logger_args["name"] == "wandb":
         os.makedirs(experiment_dir, exist_ok=True)
+        os.makedirs(log_dir, exist_ok=True)
         offline = logger_args.get("offline", False)
         logger = pl_loggers.WandbLogger(
             name=run_name,
@@ -247,7 +248,8 @@ def main(conf: DictConfig) -> None:
             log_model=(not offline),
             offline=offline,
         )
-        wandb.run.log_code("torchgeo")
+        # if wandb.run is not None:
+        #     wandb.run.log_code("torchgeo")
     else:
         raise ValueError(
             f"experiment.task={task_name} is not recognized as a valid task"
@@ -256,7 +258,7 @@ def main(conf: DictConfig) -> None:
     callbacks: List[Callback] = []
     if conf.program.overwrite:
         checkpoint_callback = ModelCheckpoint(
-            dirpath=run_dir, every_n_epochs=0, save_last=True
+            dirpath=run_dir, every_n_epochs=20, save_last=True
         )
         callbacks.append(checkpoint_callback)
 
@@ -270,6 +272,14 @@ def main(conf: DictConfig) -> None:
     trainer_args["logger"] = logger
     trainer_args["default_root_dir"] = experiment_dir
 
+    if "gpus" in trainer_args and len(trainer_args["gpus"]) > 1:
+        from pytorch_lightning.strategies import DDPStrategy
+
+        trainer = Trainer(
+            **trainer_args,
+            strategy=DDPStrategy(find_unused_parameters=False, static_graph=True),
+        )
+    else:
     trainer = Trainer(**trainer_args)
 
     if trainer_args.get("auto_lr_find"):

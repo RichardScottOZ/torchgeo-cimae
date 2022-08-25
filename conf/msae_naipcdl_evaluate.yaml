@@ -15,6 +15,7 @@ experiment:
     encoder_name: "vit"
     sensor: "naip"
     bands: "all"
+    batch_size: ${experiment.datamodule.batch_size}
     mean_patches: True
     channel_wise: True
     patch_size: 16

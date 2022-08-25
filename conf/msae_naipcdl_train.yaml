@@ -3,6 +3,7 @@ trainer:
   max_epochs: 100
   precision: 32
   benchmark: True
+  replace_sampler_ddp: False
 experiment:
   task: "msae_naipcdl_train"
   name: "msae_naipcdl_train"
@@ -18,7 +19,7 @@ experiment:
     image_size: 256
     crop_size: 224
     patch_size: 16
-    batch_size: 64
+    batch_size: ${experiment.datamodule.batch_size}
     mean_patches: True
     channel_wise: True
     channel_shuffle: True
@@ -32,7 +33,7 @@ experiment:
     mask_fn:
       - "random_masking"
     mask_kwargs:
-      random_mask_ratio: 0.7
+      random_mask_num_keep: 256
       random_mask_probability: 1.0
   datamodule:
     naip_root_dir: "/data/users/mike/data/NAIP"

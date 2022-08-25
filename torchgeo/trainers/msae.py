@@ -205,17 +205,19 @@ class MSAETask(LightningModule):
             a "lr dict" according to the pytorch lightning documentation --
             https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#configure-optimizers
         """
+        if self.trainer is None:
+            return {}
+
         optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "AdamW"))
         lr = self.hyperparams.get("lr", 1e-3)
-        actual_lr = lr * self.hyperparams.get("batch_size", 64) / 256
+        actual_lr = (
+            lr * self.hyperparams.get("batch_size", 64) / 256 * self.trainer.devices
+        )
         weight_decay = self.hyperparams.get("weight_decay", 0.05)
         betas = self.hyperparams.get("betas", (0.9, 0.95))
         optimizer = optimizer_class(
             self.parameters(), lr=actual_lr, weight_decay=weight_decay, betas=betas
         )
-
-        if self.trainer is None:
-            return {}
 
         return {
             "optimizer": optimizer,
@@ -259,6 +261,7 @@ class MSAETask(LightningModule):
 
         # Calculate losses
         losses = self.get_losses(item1, item2, stage)
+
         self.log_dict(
             losses, on_step=stage != "val", on_epoch=True, sync_dist=stage != "train"
         )
@@ -281,9 +284,7 @@ class MSAETask(LightningModule):
 
         input = input[:, encoder_channels]
         target = target[:, decoder_channels]
-
-        mask_target = mask_input[decoder_channels].flatten()
-        mask_input = mask_input[encoder_channels].flatten()
+        mask = mask[encoder_channels].flatten()
 
         input = input.flatten(0, 1).unsqueeze(1)
         target = target.flatten(0, 1).unsqueeze(1)
@@ -291,26 +292,10 @@ class MSAETask(LightningModule):
         return {
             "input": input,
             "target": target,
-            "mask_input": mask_input,
-            "mask_target": mask_target,
+            "mask": mask,
             "encoder_channels": encoder_channels,  # type: ignore
             "decoder_channels": decoder_channels,  # type: ignore
         }
-
-    def generate_mask(
-        self, C: int, num_patches: int, device: torch.device | str
-    ) -> Tensor:
-        """Generate a mask of the image."""
-        mask = torch.zeros(
-            1 if not self.channel_wise else C,
-            num_patches,
-            device=device,
-            dtype=torch.bool,
-        )
-        for masking_name in self.mask_fn:
-            mask = MASKING_FUNCTIONS[masking_name](mask, **self.mask_kwargs)
-
-        return mask
 
     def get_losses(
         self, item1: dict[str, Tensor], item2: dict[str, Tensor], stage: str | None
@@ -341,7 +326,7 @@ class MSAETask(LightningModule):
         """
         output = self.shared_step("train", *args, **kwargs)
 
-        return cast(Tensor, output["loss"])
+        return output["loss"]
 
     def validation_step(self, *args: Any, **kwargs: Any) -> dict[str, Tensor]:
         """Compute validation loss.
@@ -351,7 +336,7 @@ class MSAETask(LightningModule):
         """
         output = self.shared_step("val", *args, **kwargs)
 
-        if args[1] > 0:
+        if args[1] > 0 or self.device.index != 0:
             return {}
 
         images1 = self.prepare_output(output["item1"])  # type: ignore
@@ -374,7 +359,7 @@ class MSAETask(LightningModule):
             item["input"],
             item["target"],
             item["pred"],
-            item["mask_input"],
+            item["mask"],
             item["latent"],
         )
 
@@ -388,17 +373,19 @@ class MSAETask(LightningModule):
 
         pred = unpatchify(pred, self.patch_size)
         masked_target = unpatchify(masked_target, self.patch_size)
-        latent = unpatchify(latent, int(self.embed_dim**0.5))
+        latent = unpatchify(latent, int(self.embed_dim**0.5))[:, :3]
 
         latent /= latent.amax()
         pred /= pred.amax()
 
-        target = target.view(self.B, -1, self.crop_size, self.crop_size)
-        input = input.view(self.B, -1, self.crop_size, self.crop_size)
-        masked_target = masked_target.view(self.B, -1, self.crop_size, self.crop_size)
-        pred = pred.view(self.B, -1, self.crop_size, self.crop_size)
+        target = target.view(self.B, -1, self.crop_size, self.crop_size)[:, :3]
+        input = input.view(self.B, -1, self.crop_size, self.crop_size)[:, :3]
+        masked_target = masked_target.view(self.B, -1, self.crop_size, self.crop_size)[
+            :, :3
+        ]
+        pred = pred.view(self.B, -1, self.crop_size, self.crop_size)[:, :3]
 
-        images = pad_imgs_dims([input, masked_target, pred, target], self.C)
+        images = pad_imgs_dims([input, masked_target, pred, target], 3)
 
         return {"images": images, "latent": latent}
 
@@ -429,10 +416,10 @@ class MSAETask(LightningModule):
         latent_grid2 = make_grid(latent2)
         latent_grid2 = wandb.Image(latent_grid2, caption="Latent")
 
-        wandb.log({"Images1": images1})
-        wandb.log({"Images2": images2})
-        wandb.log({"Latent1": latent_grid1})
-        wandb.log({"Latent2": latent_grid2})
+        self.logger.experiment.log({"Images1": images1})
+        self.logger.experiment.log({"Images2": images2})
+        self.logger.experiment.log({"Latent1": latent_grid1})
+        self.logger.experiment.log({"Latent2": latent_grid2})
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """No-op, does nothing."""

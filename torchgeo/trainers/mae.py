@@ -187,17 +187,17 @@ class MAETask(LightningModule):
             a "lr dict" according to the pytorch lightning documentation --
             https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#configure-optimizers
         """
+        if self.trainer is None:
+            return {}
+
         optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "AdamW"))
         lr = self.hyperparams.get("lr", 1e-3)
-        actual_lr = lr * self.B / 256
+        actual_lr = lr * self.B / 256 * self.trainer.devices
         weight_decay = self.hyperparams.get("weight_decay", 0.05)
         betas = self.hyperparams.get("betas", (0.9, 0.95))
         optimizer = optimizer_class(
             self.parameters(), lr=actual_lr, weight_decay=weight_decay, betas=betas
         )
-
-        if self.trainer is None:
-            return {}
 
         return {
             "optimizer": optimizer,
@@ -228,70 +228,66 @@ class MAETask(LightningModule):
         """TODO: Docstring."""
         batch = args[0]
         x = batch["image"]
-        _, self.C, *_ = x.shape
+        B, self.C, *_ = x.shape
 
         with torch.no_grad():
-            target = self.augment(x, stage)
+            item = self.get_item(x, stage)
+
+        item = self.forward(item)
+
+        item["loss"] = reconstruction_loss(
+            item["target"], item["pred"], self.patch_size
+        )
+
+        self.log(
+            f"{stage}_loss",
+            item["loss"],
+            on_step=stage == "train",
+            on_epoch=True,
+            batch_size=B,
+            sync_dist=stage != "train",
+        )
+
+        return item
+
+    def get_item(self, x: Tensor, stage: str) -> dict[str, Any]:
+        """Preparation of the data for the forward pass."""
+        target = self.augment(x, stage)
         mask = generate_mask(
             self.mask_fns, self.mask_kwargs, self.num_patches, self.C, x.device
         )
 
-            input = target.clone()
-            mask_target = mask
-            encoder_channels = decoder_channels = []
+        input = target.clone()
+        encoder_channels = decoder_channels = []
 
-            if self.channel_shuffle:
-                encoder_channels = torch.randperm(self.C, device=x.device).tolist()[
-                    : self.num_in_channels
-                ]
-                decoder_channels = torch.randperm(self.C, device=x.device).tolist()[
-                    : self.num_out_channels
-                ]
+        if self.channel_shuffle:
+            encoder_channels = torch.randperm(self.C, device=x.device).tolist()[
+                : self.num_in_channels
+            ]
+            decoder_channels = torch.randperm(self.C, device=x.device).tolist()[
+                : self.num_out_channels
+            ]
 
-                input = input[:, encoder_channels]
-                target = target[:, decoder_channels]
+            input = input[:, encoder_channels]
+            target = target[:, decoder_channels]
+            mask = mask[encoder_channels].flatten()
 
-                mask_target = mask[decoder_channels].flatten()
-                mask = mask[encoder_channels].flatten()
+        if self.channel_wise:
+            if not self.channel_shuffle:
+                encoder_channels = decoder_channels = torch.arange(
+                    self.C, device=x.device
+                ).tolist()
 
-            if self.channel_wise:
-                if not self.channel_shuffle:
-                    encoder_channels = decoder_channels = torch.arange(
-                        self.C, device=x.device
-                    ).tolist()
+            input = input.flatten(0, 1).unsqueeze(1)
+            target = target.flatten(0, 1).unsqueeze(1)
 
-                input = input.flatten(0, 1).unsqueeze(1)
-                target = target.flatten(0, 1).unsqueeze(1)
-
-            item = {
-                "input": input,
-                "target": target,
-                "mask": mask,
-                "encoder_channels": encoder_channels,
-                "decoder_channels": decoder_channels,
-            }
-
-        item = self.forward(item)
-        item["loss"] = reconstruction_loss(target, item["pred"], self.patch_size)
-
-        self.log(f"{stage}_loss", item["loss"], on_step=stage != "val", on_epoch=True)
-
-        return item
-
-    def generate_mask(
-        self, C: int, num_patches: int, device: torch.device | str
-    ) -> Tensor:
-        """Generate a mask of the image."""
-        mask = torch.zeros(
-            1 if not self.channel_wise else C,
-            num_patches,
-            device=device,
-            dtype=torch.bool,
-        )
-        for masking_name in self.mask_fn:
-            mask = MASKING_FUNCTIONS[masking_name](mask, **self.mask_kwargs)
-
-        return mask
+        return {
+            "input": input,
+            "target": target,
+            "mask": mask,
+            "encoder_channels": encoder_channels,
+            "decoder_channels": decoder_channels,
+        }
 
     def training_step(self, *args: Any, **kwargs: Any) -> Tensor:
         """Compute and return the training loss.
@@ -314,10 +310,25 @@ class MAETask(LightningModule):
         """
         item = self.shared_step("val", *args, **kwargs)
 
-        batch_idx = args[1]
-        if batch_idx > 0:
+        # Only log images of first batch
+        if args[1] > 0 or self.device.index != 1:
             return {}
 
+        images = self.prepare_output(item)
+
+        return images
+
+    def prepare_output(self, item: dict[str, Tensor]) -> dict[str, Tensor]:
+        """Prepare the output for logging.
+
+        Args:
+            aug: tensor of data to run through the model
+            aug_shuffled: tensor of data to run through the model
+            pred: tensor of data to run through the model
+
+        Returns:
+            output from the model
+        """
         input, target, pred, mask, latent = (
             item["input"],
             item["target"],
@@ -345,14 +356,14 @@ class MAETask(LightningModule):
         pred /= pred.amax()
 
         if self.channel_wise:
-            target = target.view(self.B, -1, self.crop_size, self.crop_size)
-            input = input.view(self.B, -1, self.crop_size, self.crop_size)
+            target = target.view(self.B, -1, self.crop_size, self.crop_size)[:, :3]
+            input = input.view(self.B, -1, self.crop_size, self.crop_size)[:, :3]
             masked_target = masked_target.view(
                 self.B, -1, self.crop_size, self.crop_size
-            )
-            pred = pred.view(self.B, -1, self.crop_size, self.crop_size)
+            )[:, :3]
+            pred = pred.view(self.B, -1, self.crop_size, self.crop_size)[:, :3]
 
-        images = pad_imgs_dims([input, masked_target, pred, target], self.C)
+        images = pad_imgs_dims([input, masked_target, pred, target], 3)
 
         return {"images": images, "latent": latent}
 
@@ -362,12 +373,15 @@ class MAETask(LightningModule):
         | list[list[Tensor | dict[str, Any]]],
     ) -> None:
         """Log images."""
+        if self.device.index != 1:
+            return
+
         images = validation_step_outputs[0]["images"]  # type: ignore
 
         grid = make_grid(images[:, :8].flatten(0, 1)[:, :3])
         images_grid = wandb.Image(grid, caption="Images")
 
-        wandb.log({"Images": images_grid})
+        self.logger.experiment.log({"Images": images_grid})
 
         latent = validation_step_outputs[0]["latent"]  # type: ignore
         latent = latent[:8].flatten(0, 1).unsqueeze(1)
@@ -375,7 +389,7 @@ class MAETask(LightningModule):
         latent_grid = make_grid(latent)
         latent_grid = wandb.Image(latent_grid, caption="Latent")
 
-        wandb.log({"Latent": latent_grid})
+        self.logger.experiment.log({"Latent": latent_grid})
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """No-op, does nothing."""
