@@ -1,8 +1,11 @@
 """Common model utilities."""
 
-from typing import Sequence
+from functools import lru_cache
 
 import torch
+from torch import Tensor
+from torch.nn import Conv2d, LayerNorm, Linear, Module, init
+from torch.nn.parameter import Parameter
 
 
 # TODO: Attribution (Facebook)
@@ -83,3 +86,46 @@ def get_1d_sincos_pos_embed_from_grid(
     emb = torch.cat([emb_sin, emb_cos], dim=1)  # (M, D)
 
     return emb
+
+
+def _init_weights(m: Module) -> None:
+    """Initialize the weights."""
+    if isinstance(m, Linear):
+        init.xavier_uniform_(m.weight)
+        if isinstance(m, Linear) and m.bias is not None:
+            init.constant_(m.bias, 0)
+    elif isinstance(m, LayerNorm):
+        init.constant_(m.bias, 0)
+        init.constant_(m.weight, 1.0)
+    elif isinstance(m, Conv2d):
+        w = m.weight.data
+        init.xavier_uniform_(w.view([w.shape[0], -1]))
+
+
+def get_positional_encodings(
+    embed_dim: int, num_patches: int, channel_wise: bool
+) -> Parameter:
+    """Initialize the positional embeddings."""
+    positional_embeddings = get_2d_sincos_pos_embed(
+        embed_dim, int(num_patches**0.5), cls_token=False
+    )
+    if not channel_wise:
+        positional_embeddings = positional_embeddings.unsqueeze(0)
+
+    return Parameter(positional_embeddings, requires_grad=False)
+
+
+@lru_cache(128)
+def get_channel_encodings(
+    channels: tuple[int], num_patches: int, embed_size: int, device: str | torch.device
+) -> Tensor:
+    """Get the channel encodings for the given channels."""
+    channel_encoding = get_1d_sincos_pos_embed_from_grid(
+        embed_size,
+        torch.tensor(channels, dtype=torch.float, device=device),
+        device=device,
+    )
+
+    channel_encoding = channel_encoding.repeat_interleave(repeats=num_patches, dim=0)
+
+    return channel_encoding

@@ -5,7 +5,7 @@
 
 import warnings
 from collections import OrderedDict
-from typing import Any, Optional, Tuple, Union, cast, Callable
+from typing import Any, Callable, Optional, Tuple, Union, cast
 
 import torch
 import torch.nn as nn

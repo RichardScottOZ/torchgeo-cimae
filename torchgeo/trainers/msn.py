@@ -21,9 +21,7 @@ from .utils import random_masking
 # https://github.com/pytorch/pytorch/pull/61045
 Module.__module__ = "torch.nn"
 
-MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {
-    "random_masking": random_masking,
-}
+MASKING_FUNCTIONS: dict[str, Callable[..., Tensor]] = {"random_masking": random_masking}
 
 
 class Augmentations(Module):

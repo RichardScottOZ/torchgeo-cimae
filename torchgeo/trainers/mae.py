@@ -16,7 +16,7 @@ from torchvision.utils import make_grid
 
 from ..models import MaskedAutoencoderViT
 from ..utils import _to_tuple
-from .utils import pad_imgs_dims, patchify, unpatchify, generate_mask
+from .utils import generate_mask, pad_imgs_dims, patchify, unpatchify
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045
@@ -134,13 +134,13 @@ class MAETask(LightningModule):
             image_size=self.crop_size,
             patch_size=self.patch_size,
             channel_wise=self.channel_wise,
-            embed_token=self.embed_token,
-            embed_token_reduction=self.embed_token_reduction,
             embed_dim=self.embed_dim,
             depth=self.hyperparams.get("depth", 24),
             num_heads=self.hyperparams.get("num_heads", 16),
             dropout_rate=self.hyperparams.get("dropout_rate", 0.0),
             dropout_attn=self.hyperparams.get("dropout_attn", 0.0),
+            expander_depth=self.hyperparams.get("expander_depth", 2),
+            expander_num_heads=self.hyperparams.get("expander_num_heads", 1),
         )
 
         self.mask_fns = self.hyperparams.get("mask_fn", ["random_masking"])
@@ -222,9 +222,7 @@ class MAETask(LightningModule):
         """
         return self.model(*args, **kwargs)
 
-    def shared_step(
-        self, stage: str | None = None, *args: Any, **kwargs: Any
-    ) -> dict[str, Tensor]:
+    def shared_step(self, stage: str, *args: Any, **kwargs: Any) -> dict[str, Tensor]:
         """TODO: Docstring."""
         batch = args[0]
         x = batch["image"]

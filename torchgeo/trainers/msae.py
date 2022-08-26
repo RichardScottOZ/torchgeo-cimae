@@ -17,7 +17,7 @@ from torchvision.utils import make_grid
 
 from ..models import MaskedAutoencoderViT
 from ..utils import _to_tuple
-from .utils import pad_imgs_dims, patchify, unpatchify, generate_mask
+from .utils import generate_mask, pad_imgs_dims, patchify, unpatchify
 
 # https://github.com/pytorch/pytorch/issues/60979
 # https://github.com/pytorch/pytorch/pull/61045

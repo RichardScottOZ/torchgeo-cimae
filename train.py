@@ -82,6 +82,8 @@ TASK_TO_MODULES_MAPPING: Dict[
     "msae_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
     "cae_naipcdl_train": (CAETask, NAIPCDLDataModule),
     "cae_naipcdl_evaluate": (EmbeddingEvaluator, NAIPCDLDataModule),
+    "mae_bigearthnet_train": (MAETask, BigEarthNetDataModule),
+    "mae_bigearthnet_evaluate": (EmbeddingEvaluator, BigEarthNetDataModule),
 }
 
 
@@ -251,8 +253,8 @@ def main(conf: DictConfig) -> None:
             log_model=(not offline),
             offline=offline,
         )
-        # if wandb.run is not None:
-        #     wandb.run.log_code("torchgeo")
+        if "gpus" not in trainer_args or len(trainer_args["gpus"]) == 1:
+            wandb.run.log_code("torchgeo")
     else:
         raise ValueError(
             f"experiment.task={task_name} is not recognized as a valid task"

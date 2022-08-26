@@ -146,7 +146,18 @@ class EmbeddingEvaluator(LightningModule):
             else:
                 task = CAETask(**self.hyperparams)
             task.freeze()
-            self.encoder = task.model.encoder
+            if not self.hyperparams.get("use_expander", False):
+                self.encoder = task.model.encoder
+            else:
+                self.encoder_module = task.model.encoder
+                self.expander_module = task.model.expander
+
+                def encode(item: dict[str, Tensor]) -> Tensor:
+                    item["latent"] = self.encoder_module(item)
+                    return cast(Tensor, self.expander_module(item))
+
+                self.encoder = encode
+
         elif self.hyperparams["task_name"] == "msn":
             if "checkpoint_path" in self.hyperparams and isfile(
                 self.hyperparams["checkpoint_path"]
@@ -254,6 +265,9 @@ class EmbeddingEvaluator(LightningModule):
             a "lr dict" according to the pytorch lightning documentation --
             https://pytorch-lightning.readthedocs.io/en/latest/common/lightning_module.html#configure-optimizers
         """
+        if self.trainer is None:
+            return {}
+
         optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "SGD"))
         lr = self.hyperparams.get("lr", 2e-2)
         actual_lr = lr * self.B / 256 * self.trainer.num_devices
@@ -266,7 +280,7 @@ class EmbeddingEvaluator(LightningModule):
             weight_decay=weight_decay,
         )
 
-        scheduler = CosineAnnealingLR(optimizer, T_max=self.trainer.max_epochs)  # type: ignore
+        scheduler = CosineAnnealingLR(optimizer, T_max=self.trainer.max_epochs)
 
         return {
             "optimizer": optimizer,

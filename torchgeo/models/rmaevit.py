@@ -1,6 +1,6 @@
 """MaskedVit."""
 
-from typing import cast, Any
+from typing import cast
 
 import torch
 from kornia.contrib.vit import FeedForward, TransformerEncoderBlock
