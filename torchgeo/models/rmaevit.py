@@ -157,6 +157,8 @@ class MaskedEncoderViT(Module):
         """Initialize a new VisionTransformer model."""
         super().__init__()
 
+        self.embed_dim = embed_dim
+
         self.embed_module = EncoderEmbedding(
             in_channels, embed_dim, patch_size, image_size, channel_wise
         )
@@ -166,46 +168,8 @@ class MaskedEncoderViT(Module):
         )
         self.norm = LayerNorm(embed_dim)
 
-        self.apply(_init_weights)
-
-    def forward(self, item: dict[str, Tensor]) -> Tensor:
-        """Forward pass of the model."""
-        x = self.embed_module(item["input"], item["encoder_channels"])
-        mask = item.get("mask", None)
-
-        if mask is not None:
-            x = x[:, ~mask]
-
-        x = self.encoder(x)
-        x = self.norm(x)
-
-        return cast(Tensor, x)
-
-
-class MaskedEmbeddingExpander(Module):
-    """Masked embedding module."""
-
-    def __init__(
-        self,
-        embed_dim: int,
-        num_patches: int,
-        in_channels: int,
-        depth: int,
-        num_heads: int,
-        dropout_rate: float = False,
-        dropout_attn: float = False,
-        channel_wise: bool = False,
-    ) -> None:
-        """Initialize the masked embedding module."""
-        super().__init__()
-
-        self.embed_dim = embed_dim
-        self.channel_wise = channel_wise
-        self.num_patches = num_patches
-        self.in_channels = in_channels
-
         self.positional_encodings = get_positional_encodings(
-            self.embed_dim, self.num_patches, self.channel_wise
+            self.embed_dim, self.num_patches, channel_wise
         )
 
         self.embed_token = Parameter(
@@ -215,24 +179,17 @@ class MaskedEmbeddingExpander(Module):
             embed_dim, self.num_patches, channel_wise
         )
 
-        self.encoder = TransformerEncoder(
-            embed_dim, depth, num_heads, dropout_rate, dropout_attn
-        )
-        self.norm = LayerNorm(embed_dim)
-
-        self.conv = Conv2d(self.in_channels, 1, (1, 1))
-
         self.apply(_init_weights)
 
     def get_embed_token(self, x: Tensor, mask: Tensor, embed_token: Tensor) -> Tensor:
         """Reduce the embed token by using the values not masked in place."""
-        mask = mask.view(-1, self.num_patches)  # (C, P)
-        C, P = mask.shape
+        PS = len(mask)
         B, *_ = x.shape
 
-        x_full = torch.zeros(B, P * C, self.embed_dim, device=x.device)
-        x_full[:, ~mask.flatten()] = x
+        x_full = torch.zeros((B, PS, self.embed_dim), device=x.device, dtype=x.dtype)
+        x_full[:, ~mask] = x
 
+        mask = mask.view(-1, self.num_patches)  # (C, P)
         visible_mask = torch.zeros(
             1, self.num_patches, device=x.device, dtype=torch.bool
         )
@@ -248,16 +205,50 @@ class MaskedEmbeddingExpander(Module):
         return embed_token
 
     def forward(self, item: dict[str, Tensor]) -> Tensor:
-        """Forward pass of the embedding module."""
-        x = item["latent"]
+        """Forward pass of the model."""
+        x = self.embed_module(item["input"], item["encoder_channels"])
         mask = item.get("mask", None)
-        B, *_ = x.shape
 
         if mask is not None:
+            x = x[:, ~mask]
+
+        x = self.encoder(x)
+        x = self.norm(x)
+
+        if mask is None:
+            x = x[:, : self.num_patches]
+        else:
+            B, *_ = x.shape
             embed_token = self.embed_token.repeat(B, 1, 1)
             x = self.get_embed_token(x, mask, embed_token)
-        else:
-            x = x[:, : self.num_patches]
+
+        return cast(Tensor, x)
+
+
+class MaskedEmbeddingExpander(Module):
+    """Masked embedding module."""
+
+    def __init__(
+        self,
+        embed_dim: int,
+        depth: int,
+        num_heads: int,
+        dropout_rate: float = False,
+        dropout_attn: float = False,
+    ) -> None:
+        """Initialize the masked embedding module."""
+        super().__init__()
+
+        self.encoder = TransformerEncoder(
+            embed_dim, depth, num_heads, dropout_rate, dropout_attn
+        )
+        self.norm = LayerNorm(embed_dim)
+
+        self.apply(_init_weights)
+
+    def forward(self, item: dict[str, Tensor]) -> Tensor:
+        """Forward pass of the embedding module."""
+        x = item["latent"]
 
         x = self.encoder(x)
         x = self.norm(x)
@@ -360,12 +351,7 @@ class ReducingMaskedAutoencoderViT(Module):
         )
 
         self.expander = MaskedEmbeddingExpander(
-            embed_dim=embed_dim,
-            num_patches=self.encoder.num_patches,
-            in_channels=IN_CHANNELS[sensor][bands],
-            depth=expander_depth,
-            num_heads=expander_num_heads,
-            channel_wise=channel_wise,
+            embed_dim=embed_dim, depth=expander_depth, num_heads=expander_num_heads
         )
 
         self.decoder = MaskedDecoderViT(
