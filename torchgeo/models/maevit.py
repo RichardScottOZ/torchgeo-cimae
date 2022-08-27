@@ -6,9 +6,13 @@ import torch
 from kornia.contrib.vit import FeedForward, TransformerEncoderBlock
 from torch import Tensor
 from torch.nn import Conv2d, LayerNorm, Module, Sequential
-from torch.nn.parameter import Parameter
 
-from .utils import _init_weights, get_channel_encodings, get_positional_encodings
+from .utils import (
+    _init_weights,
+    get_channel_encodings,
+    get_mask_token,
+    get_positional_encodings,
+)
 
 IN_CHANNELS = {"sentinel2": {"all": 10}, "naip": {"all": 4}, "bigearthnet": {"all": 14}}
 NUM_CLASSES = {"sentinel2": 17, "naip": 0}
@@ -56,14 +60,13 @@ class EncoderEmbedding(Module):
         super().__init__()
 
         self.num_patches = (image_size // patch_size) ** 2
+        self.channel_wise = channel_wise
+
         self.embedder = Conv2d(
             input_dim if not channel_wise else 1,
             embed_dim,
             kernel_size=patch_size,
             stride=patch_size,
-        )
-        self.positional_encodings = get_positional_encodings(
-            embed_dim, self.num_patches, channel_wise
         )
 
         self.apply(_init_weights)
@@ -80,7 +83,8 @@ class EncoderEmbedding(Module):
         B, H, PW, _ = x.shape
         x = x.view(B, H, PW**2).permute(0, 2, 1)  # BxCxPSxPS -> BxPxH
 
-        x += self.positional_encodings
+        *_, H = x.shape
+        x += get_positional_encodings(H, self.num_patches, self.channel_wise, x.device)
 
         if len(channels):
             x = x.reshape(-1, len(channels) * PW**2, H)
@@ -110,6 +114,8 @@ class MaskedEncoderViT(Module):
         super().__init__()
 
         self.embed_dim = embed_dim
+        self.channel_wise = channel_wise
+
         self.embed_module = EncoderEmbedding(
             in_channels, embed_dim, patch_size, image_size, channel_wise
         )
@@ -120,41 +126,19 @@ class MaskedEncoderViT(Module):
         )
         self.norm = LayerNorm(embed_dim)
 
-        self.positional_encodings = get_positional_encodings(
-            self.embed_dim, self.num_patches, channel_wise
-        )
-        self.embed_token = Parameter(
-            -torch.ones(1, self.num_patches, self.embed_dim), requires_grad=False
-        )
-        self.embed_token += get_positional_encodings(  # type: ignore
-            self.embed_dim, self.num_patches, channel_wise
-        )
-
         self.apply(_init_weights)
 
-    # TODO: Rework this to be more efficient.
-    def get_embed_token(self, x: Tensor, mask: Tensor, embed_token: Tensor) -> Tensor:
+    def reduce_mask_token(self, x: Tensor, mask: Tensor, mask_token: Tensor) -> Tensor:
         """Reduce the embed token by using the values not masked in place."""
-        PS = len(mask)
-        B, *_ = x.shape
-
-        x_full = torch.zeros((B, PS, self.embed_dim), device=x.device, dtype=x.dtype)
-        x_full[:, ~mask] = x
-
         mask = mask.view(-1, self.num_patches)  # (C, P)
-        visible_mask = torch.zeros(
-            1, self.num_patches, device=x.device, dtype=torch.bool
-        )
-        mask = torch.cat([mask, visible_mask], dim=0)
 
-        selection_mask = (~mask).T.float().argmax(dim=1)
-        selection_mask *= self.num_patches
-        selection_mask += torch.arange(self.num_patches, device=x.device)
+        visible_pos_indices = (~mask).nonzero()[:, 1]
+        sorted_visible, _ = visible_pos_indices.sort(stable=True)
+        indices = sorted_visible.unique_consecutive()  # type: ignore
 
-        x_full = torch.cat((x_full, embed_token), dim=1)
-        embed_token = x_full[:, selection_mask]
+        mask_token[:, indices] = x[:, indices]
 
-        return embed_token
+        return mask_token
 
     def forward(self, item: dict[str, Tensor | list[int]]) -> Tensor:
         """Forward pass of the model."""
@@ -172,8 +156,10 @@ class MaskedEncoderViT(Module):
 
         if mask is not None:
             B, *_ = x.shape
-            embed_token = self.embed_token.repeat(B, 1, 1)
-            x = self.get_embed_token(x, mask, embed_token)
+            mask_token = get_mask_token(
+                B, self.num_patches, self.embed_dim, self.channel_wise, x.device
+            )
+            x = self.reduce_mask_token(x, mask, mask_token)
         else:
             x = x[:, : self.num_patches]
 
@@ -203,9 +189,7 @@ class MaskedEmbeddingExpander(Module):
 
     def forward(self, item: dict[str, Tensor]) -> Tensor:
         """Forward pass of the embedding module."""
-        x = item["latent"]
-
-        x = self.encoder(x)
+        x = self.encoder(item["latent"])
         x = self.norm(x)
 
         return x
