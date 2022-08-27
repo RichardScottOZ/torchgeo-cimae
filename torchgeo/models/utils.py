@@ -102,17 +102,22 @@ def _init_weights(m: Module) -> None:
         init.xavier_uniform_(w.view([w.shape[0], -1]))
 
 
+@lru_cache(128)
 def get_positional_encodings(
-    embed_dim: int, num_patches: int, channel_wise: bool
-) -> Parameter:
+    embed_dim: int,
+    num_patches: int,
+    channel_wise: bool,
+    device: str | torch.device = "cpu",
+) -> Tensor:
     """Initialize the positional embeddings."""
     positional_embeddings = get_2d_sincos_pos_embed(
-        embed_dim, int(num_patches**0.5), cls_token=False
+        embed_dim, int(num_patches**0.5), cls_token=False, device=device
     )
-    if not channel_wise:
-        positional_embeddings = positional_embeddings.unsqueeze(0)
 
-    return Parameter(positional_embeddings, requires_grad=False)
+    if not channel_wise:
+        return positional_embeddings.unsqueeze(0)
+
+    return positional_embeddings
 
 
 @lru_cache(128)
@@ -129,3 +134,19 @@ def get_channel_encodings(
     channel_encoding = channel_encoding.repeat_interleave(repeats=num_patches, dim=0)
 
     return channel_encoding
+
+
+@lru_cache(128)
+def get_mask_token(
+    batch_size: int,
+    num_patches: int,
+    embed_dim: int,
+    channel_wise: bool = False,
+    device: str | torch.device = "cpu",
+) -> Tensor:
+    """Get the mask token."""
+    embed_token = -torch.ones(batch_size, num_patches, embed_dim, device=device)
+    embed_token += get_positional_encodings(
+        embed_dim, num_patches, channel_wise, device=device
+    )
+    return embed_token
