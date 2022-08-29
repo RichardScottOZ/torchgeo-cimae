@@ -150,3 +150,27 @@ def get_mask_token(
         embed_dim, num_patches, channel_wise, device=device
     )
     return embed_token
+
+
+def reduce_mask_token(
+    x: Tensor,
+    mask: Tensor,
+    mask_token: Tensor,
+    num_patches: int,
+    keep_unreduced: bool = False,
+) -> Tensor:
+    """Reduce the embed token by using the values not masked in place."""
+    mask = mask.view(-1, num_patches)  # (C, P)
+
+    visible_pos_indices = (~mask).nonzero()[:, 1]
+    sorted_visible, _ = visible_pos_indices.sort(stable=True)
+    indices = sorted_visible.unique_consecutive()  # type: ignore
+
+    mask_token[:, indices] = x[:, indices]
+
+    if keep_unreduced:
+        all_patches = torch.arange(num_patches, device=x.device)
+        unreduced_indices = all_patches[(all_patches != indices.view(-1, 1)).all(dim=0)]
+        mask_token = torch.cat([mask_token, x[:, unreduced_indices]], dim=1)
+
+    return mask_token
