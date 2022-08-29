@@ -265,6 +265,7 @@ class BigEarthNet(NonGeoDataset):
         bands: str = "all",
         num_classes: int = 19,
         transforms: Optional[Callable[[Dict[str, Tensor]], Dict[str, Tensor]]] = None,
+        load_target: bool = True,
         download: bool = False,
         checksum: bool = False,
     ) -> None:
@@ -288,6 +289,7 @@ class BigEarthNet(NonGeoDataset):
         self.bands = bands
         self.num_classes = num_classes
         self.transforms = transforms
+        self.load_target = load_target
         self.download = download
         self.checksum = checksum
         self.class2idx = {c: i for i, c in enumerate(self.class_sets[43])}
@@ -304,8 +306,11 @@ class BigEarthNet(NonGeoDataset):
             data and label at that index
         """
         image = self._load_image(index)
-        label = self._load_target(index)
-        sample: Dict[str, Tensor] = {"image": image, "label": label}
+        sample: Dict[str, Tensor] = {"image": image}
+
+        if self.load_target:
+            label = self._load_target(index)
+            sample["label"] = label
 
         if self.transforms is not None:
             sample = self.transforms(sample)
@@ -382,6 +387,12 @@ class BigEarthNet(NonGeoDataset):
         """
         paths = self._load_paths(index)
         images = []
+
+        if len(paths) == 1:
+            with rasterio.open(paths[0]) as dataset:
+                array = dataset.read(out_shape=self.image_size, out_dtype="int32")
+            return torch.from_numpy(array)
+
         for path in paths:
             # Bands are of different spatial resolutions
             # Resample to (120, 120)

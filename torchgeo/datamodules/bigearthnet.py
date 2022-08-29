@@ -79,6 +79,10 @@ class BigEarthNetDataModule(pl.LightningDataModule):
         num_classes: int = 19,
         batch_size: int = 64,
         num_workers: int = 0,
+        pin_memory: bool = False,
+        prefetch_factor: int = 10,
+        persistent_workers: bool = False,
+        load_target: bool = True,
         **kwargs: Any,
     ) -> None:
         """Initialize a LightningDataModule for BigEarthNet based DataLoaders.
@@ -91,11 +95,16 @@ class BigEarthNetDataModule(pl.LightningDataModule):
             num_workers: The number of workers to use in all created DataLoaders
         """
         super().__init__()
+
         self.root_dir = root_dir
         self.bands = bands
         self.num_classes = num_classes
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.pin_memory = pin_memory
+        self.prefetch_factor = prefetch_factor
+        self.persistent_workers = persistent_workers
+        self.load_target = load_target
 
         if bands == "all":
             self.mins = self.band_mins[:, None, None]
@@ -133,6 +142,7 @@ class BigEarthNetDataModule(pl.LightningDataModule):
             bands=self.bands,
             num_classes=self.num_classes,
             transforms=transforms,
+            load_target=self.load_target,
         )
         self.val_dataset = BigEarthNet(
             self.root_dir,
@@ -140,6 +150,7 @@ class BigEarthNetDataModule(pl.LightningDataModule):
             bands=self.bands,
             num_classes=self.num_classes,
             transforms=transforms,
+            load_target=self.load_target,
         )
         self.test_dataset = BigEarthNet(
             self.root_dir,
@@ -147,33 +158,77 @@ class BigEarthNetDataModule(pl.LightningDataModule):
             bands=self.bands,
             num_classes=self.num_classes,
             transforms=transforms,
+            load_target=self.load_target,
         )
 
     def train_dataloader(self) -> DataLoader[Any]:
         """Return a DataLoader for training."""
+        if self.num_workers > 0:
+            return DataLoader(
+                self.train_dataset,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                shuffle=True,
+                pin_memory=self.pin_memory,
+                prefetch_factor=self.prefetch_factor,
+                persistent_workers=self.persistent_workers,
+                drop_last=True
+            )
+
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             shuffle=True,
+            pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
+            drop_last=True
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
         """Return a DataLoader for validation."""
+        if self.num_workers > 0:
+            return DataLoader(
+                self.val_dataset,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                shuffle=False,
+                pin_memory=self.pin_memory,
+                prefetch_factor=self.prefetch_factor,
+                persistent_workers=self.persistent_workers,
+                drop_last=True
+            )
+
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             shuffle=False,
+            pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
+            drop_last=True
         )
 
     def test_dataloader(self) -> DataLoader[Any]:
         """Return a DataLoader for testing."""
+        if self.num_workers > 0:
+            return DataLoader(
+                self.test_dataset,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                shuffle=False,
+                pin_memory=self.pin_memory,
+                prefetch_factor=self.prefetch_factor,
+                persistent_workers=self.persistent_workers,
+            )
+
         return DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             shuffle=False,
+            pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
         )
 
     def plot(self, *args: Any, **kwargs: Any) -> plt.Figure:
