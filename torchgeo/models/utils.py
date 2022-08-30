@@ -120,15 +120,32 @@ def get_positional_encodings(
     return positional_embeddings
 
 
-@lru_cache(128)
 def get_channel_encodings(
-    channels: tuple[int], num_patches: int, embed_size: int, device: str | torch.device
+    embed_dim: int, channels: tuple[int], num_patches: int, device: str | torch.device
+) -> Tensor:
+    """Get the channel encodings for the given channels."""
+    channels_sorted, channel_order = torch.tensor(
+        channels, dtype=torch.float, device=device
+    ).sort()
+
+    channel_encoding = get_channel_encoding(
+        embed_dim, channels_sorted, num_patches, device
+    )
+
+    channel_encoding = channel_encoding.view(len(channels), num_patches, embed_dim)[
+        channel_order.argsort()
+    ].flatten(0, 1)
+
+    return channel_encoding
+
+
+@lru_cache(128)
+def get_channel_encoding(
+    embed_dim: int, channels: Tensor, num_patches: int, device: str | torch.device
 ) -> Tensor:
     """Get the channel encodings for the given channels."""
     channel_encoding = get_1d_sincos_pos_embed_from_grid(
-        embed_size,
-        torch.tensor(channels, dtype=torch.float, device=device),
-        device=device,
+        embed_dim, channels, device=device
     )
 
     channel_encoding = channel_encoding.repeat_interleave(repeats=num_patches, dim=0)
