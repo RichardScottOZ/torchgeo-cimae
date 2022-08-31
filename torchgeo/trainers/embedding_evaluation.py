@@ -1,16 +1,28 @@
 """Embedding classifciation task."""
 
 from os.path import isfile
-from typing import Any, Dict, Optional, Sequence, Tuple, cast
+from typing import Any, Sequence, cast
 
 import torch
-import wandb
 from kornia import augmentation as K
 from pytorch_lightning.core.lightning import LightningModule
 from torch import Tensor, optim
-from torch.nn import CrossEntropyLoss, Identity, Linear, Module, Sequential
+from torch.nn import (
+    BCEWithLogitsLoss,
+    CrossEntropyLoss,
+    Identity,
+    Linear,
+    Module,
+    Sequential,
+)
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torchmetrics import Accuracy, FBetaScore, JaccardIndex, MetricCollection
+from torchmetrics import (
+    Accuracy,
+    AveragePrecision,
+    FBetaScore,
+    JaccardIndex,
+    MetricCollection,
+)
 
 from ..utils import _to_tuple
 from .byol import BYOLTask
@@ -27,14 +39,14 @@ class Augmentations(Module):
 
     def __init__(
         self,
-        image_size: Tuple[int, int] = (256, 256),
-        crop_size: Optional[Tuple[int, int]] = None,
+        image_size: tuple[int, int] = (256, 256),
+        crop_size: tuple[int, int] | None = None,
     ) -> None:
         """Initialize augmentations.
 
         Args:
-            image_size: Tuple of integers defining the image size
-            crop_size: Tuple of integers defining the crop size
+            image_size: tuple of integers defining the image size
+            crop_size: tuple of integers defining the crop size
         """
         super().__init__()
 
@@ -55,7 +67,7 @@ class Augmentations(Module):
             ),
         }
 
-    def forward(self, x: Tensor, stage: Optional[str]) -> Tensor:
+    def forward(self, x: Tensor, stage: str | None = None) -> Tensor:
         """Applys augmentations to the input tensor.
 
         Args:
@@ -75,19 +87,19 @@ class EmbeddingEvaluator(LightningModule):
 
     def config_task(self) -> None:
         """Configures the task based on kwargs parameters passed to the constructor."""
-        """Configures the task based on kwargs parameters passed to the constructor."""
         self.channel_wise = self.hyperparams.get("channel_wise", False)
         self.in_channels = self.hyperparams.get("in_channels", 4)
         self.out_channels = self.hyperparams.get("out_channels", self.in_channels)
         self.mean_patches = self.hyperparams.get("mean_patches", False)
         self.patch_size = self.hyperparams.get("patch_size", 16)
         self.B = self.hyperparams.get("batch_size", 256)
+        self.multi_label = self.hyperparams.get("multi_label", False)
 
         image_size = _to_tuple(self.hyperparams["image_size"])
         crop_size = _to_tuple(self.hyperparams.get("crop_size", image_size))
         num_classes = self.hyperparams["num_classes"]
 
-        self.projector: Optional[Module] = None
+        self.projector: Module | None = None
         if self.hyperparams["task_name"] == "tile2vec":
             if "checkpoint_path" in self.hyperparams and isfile(
                 self.hyperparams["checkpoint_path"]
@@ -187,7 +199,7 @@ class EmbeddingEvaluator(LightningModule):
                 f"Task type '{self.hyperparams['task_name']}' is not valid."
             )
 
-        output = self.get_embeddings(
+        output = self.get_latent(
             torch.zeros((2, self.in_channels, crop_size[0], crop_size[1]))
         )
         if isinstance(output, Sequence):
@@ -212,26 +224,50 @@ class EmbeddingEvaluator(LightningModule):
         self.classifier.weight.data.normal_(mean=0.0, std=0.01)
         self.classifier.bias.data.zero_()
 
-        self.classifier_loss = CrossEntropyLoss()
+        self.classifier_loss = (
+            CrossEntropyLoss() if not self.multi_label else BCEWithLogitsLoss()
+        )
 
-        self.metrics = MetricCollection(
+        self.train_metrics = MetricCollection(
             {
                 "OverallAccuracy": Accuracy(
-                    num_classes=self.hyperparams["num_classes"], average="micro"
+                    num_classes=self.hyperparams["num_classes"],
+                    average="micro",
+                    multiclass=False if self.multi_label else None,
                 ),
                 "AverageAccuracy": Accuracy(
-                    num_classes=self.hyperparams["num_classes"], average="macro"
-                ),
-                "JaccardIndex": JaccardIndex(
-                    num_classes=self.hyperparams["num_classes"]
+                    num_classes=self.hyperparams["num_classes"],
+                    average="macro",
+                    multiclass=False if self.multi_label else None,
                 ),
                 "F1Score": FBetaScore(
                     num_classes=self.hyperparams["num_classes"],
                     beta=1.0,
                     average="micro",
+                    multiclass=False if self.multi_label else None,
                 ),
-            }
+                "OverallPrecision": AveragePrecision(
+                    self.hyperparams["num_classes"], average="micro"
+                ),
+                "AveragePrecision": AveragePrecision(
+                    self.hyperparams["num_classes"], average="macro"
+                ),
+            },
+            prefix="train_",
         )
+        if not self.multi_label:
+            self.train_metrics.add_metrics(
+                JaccardIndex(num_classes=self.hyperparams["num_classes"])
+            )
+
+        self.val_metrics = self.train_metrics.clone(prefix="val_")
+        self.test_metrics = self.train_metrics.clone(prefix="test_")
+
+        self.metrics = {
+            "train": self.train_metrics,
+            "val": self.val_metrics,
+            "test": self.test_metrics,
+        }
 
         self.augment = self.hyperparams.get(
             "augment_fn", Augmentations(image_size, crop_size)
@@ -254,11 +290,11 @@ class EmbeddingEvaluator(LightningModule):
 
         # Creates `self.hparams` from kwargs
         self.save_hyperparameters()  # type: ignore[operator]
-        self.hyperparams = cast(Dict[str, Any], self.hparams)
+        self.hyperparams = cast(dict[str, Any], self.hparams)
 
         self.config_task()
 
-    def configure_optimizers(self) -> Dict[str, Any]:
+    def configure_optimizers(self) -> dict[str, Any]:
         """Initialize the optimizer and learning rate scheduler.
 
         Returns:
@@ -287,143 +323,153 @@ class EmbeddingEvaluator(LightningModule):
             "lr_scheduler": {"scheduler": scheduler, "monitor": "train_loss"},
         }
 
-    def get_embeddings(self, x: Tensor) -> Tensor:
+    def get_latent(self, x: Tensor) -> Tensor:
         """TODO: Docstring."""
         B, *_ = x.shape
 
         if self.channel_wise:
-            x = x.flatten(0, 1).unsqueeze(1)  # Reorder per channel
+            x = x.flatten(0, 1).unsqueeze(1)  # Flatten per channel
 
         # TODO: Change
-        item = {"input": x, "encoder_channels": [0, 1, 2, 3]}
+        item = {
+            "input": x,
+            "encoder_channels": torch.arange(
+                self.in_channels, device=x.device
+            ).tolist(),
+        }
 
-        embeddings: Tensor = self.encoder(item)
-        if isinstance(embeddings, Sequence):
-            embeddings = embeddings[0]
-        embeddings = embeddings.reshape(B, -1)
+        latent: Tensor = self.encoder(item)
+        if isinstance(latent, Sequence):
+            latent = latent[0]
+        latent = latent.reshape(B, -1)
 
         if self.projector is not None:
-            embeddings = self.projector(embeddings)
+            latent = self.projector(latent)
 
-        return embeddings.squeeze()
+        return latent.squeeze()
 
-    def classify(self, embeddings: Tensor) -> Tensor:
+    def classify(self, latent: Tensor) -> Tensor:
         """Classify the input tensor."""
         if not self.mean_patches:
-            y_hat = self.classifier(embeddings)
+            y_hat = self.classifier(latent)
             return cast(Tensor, y_hat)
 
-        B, *_ = embeddings.shape
-
+        B, *_ = latent.shape
         if not self.channel_wise:
-            embeddings = embeddings.view(B, self.num_patches, -1)
+            latent = latent.view(B, self.num_patches, -1)
         else:
-            embeddings = (
-                embeddings.view(B, self.out_channels, self.num_patches, -1)
+            latent = (
+                latent.view(B, self.out_channels, self.num_patches, -1)
                 .transpose(1, 2)
                 .flatten(-2)
             )
 
-        y_hat = self.classifier(embeddings)
+        y_hat = self.classifier(latent)
         y_hat = y_hat.mean(dim=1)
 
         return cast(Tensor, y_hat)
 
-    def training_step(self, *args: Any, **kwargs: Any) -> Any:
-        """."""
+    def shared_step(
+        self, stage: str = "train", *args: Any, **kwargs: Any
+    ) -> dict[str, Tensor]:
+        """Perform a step of the model."""
         batch = args[0]
         x = batch["image"]
         y = batch["label"].squeeze()
 
         with torch.no_grad():
             aug = self.augment(x, "train")
-            embeddings = self.get_embeddings(aug)
+            latent = self.get_latent(aug)
 
-        y_hat = self.classify(embeddings)
+        loss = self.evaluate_classification(latent, y, stage)
 
-        loss = self.classifier_loss(y_hat, y)
-        self.log("train_loss", loss, on_step=True, on_epoch=True, batch_size=x.shape[0])
+        return {"loss": loss, "latent": latent}
 
-        return loss
+    def training_step(self, *args: Any, **kwargs: Any) -> Any:
+        """Perform a train step of the model."""
+        item = self.shared_step("train", *args, **kwargs)
+
+        return item["loss"]
 
     def validation_step(self, *args: Any, **kwargs: Any) -> Any:
-        """."""
-        batch = args[0]
-        x = batch["image"]
-        y = batch["label"].squeeze()
-
-        aug = self.augment(x, "val")
-        embeddings = self.get_embeddings(aug)
-
-        metrics = self.evaluate_classification(embeddings, y, "val")
-        self.log_dict(metrics, on_step=False, on_epoch=True, batch_size=x.shape[0])
-
-        return metrics
+        """Perform a validation step of the model."""
+        self.shared_step("val", *args, **kwargs)
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
-        """TODO: Docstring."""
-        batch = args[0]
-        x = batch["image"]
-        y = batch["label"].squeeze()
+        """Perform a test step of the model."""
+        item = self.shared_step("test", *args, **kwargs)
 
-        aug = self.augment(x, "val")
-        embeddings = self.get_embeddings(aug)
+        # metrics: dict[str, Tensor] = {}
+        # if self.channel_wise:
+        #     metrics = self.evaluate_dimensionality(item["latent"])
 
-        metrics = self.evaluate_classification(embeddings, y, "test")
-        self.log_dict(metrics, on_step=False, on_epoch=True, batch_size=x.shape[0])
-
-        if self.channel_wise:
-            metrics |= self.evaluate_dimensionality(embeddings)
-
-        return metrics
+        # return metrics
 
     def evaluate_classification(
-        self, embeddings: Tensor, y: Tensor, stage: Optional[str] = None
-    ) -> Dict[str, Tensor]:
+        self, latent: Tensor, y: Tensor, stage: str = "train"
+    ) -> Tensor:
         """TODO: Docstring."""
-        y_hat = self.classify(embeddings)
-        metrics = self.metrics(y_hat, y)
+        y_hat = self.classify(latent)
+        loss = self.classifier_loss(y_hat, y.float())
 
-        if stage:
-            metrics = {f"{stage}_{k}": v for k, v in metrics.items()}
-            metrics[f"{stage}_loss"] = metrics[f"{stage}_OverallAccuracy"]
+        if self.multi_label:
+            y_hat = y_hat.softmax(dim=-1)
 
-        return cast(Dict[str, Tensor], metrics)
+        metrics = self.metrics[stage](y_hat, y)
 
-    def evaluate_dimensionality(self, embeddings: Tensor) -> Dict[str, Tensor]:
-        """Evaluate the dimensionality of the embeddings using PCA."""
-        B, *_ = embeddings.shape
-
-        embeddings = embeddings.view(B, self.num_patches, -1).flatten(0, 1)
-        embeddings_normalized = torch.nn.functional.normalize(embeddings, dim=-1)
-        cov_embeddings = torch.cov(embeddings_normalized.T)
-        svdvals_embeddings = torch.linalg.svdvals(cov_embeddings.float())
-        svdvals_embeddings = svdvals_embeddings.log().sort(descending=True)[0]
-
-        return {"svdvals_embeddings": svdvals_embeddings}
-
-    def test_epoch_end(
-        self,
-        outputs: list[Tensor | Dict[str, Any]] | list[list[Tensor | Dict[str, Any]]],
-    ) -> None:
-        """TODO: Docstring."""
-        svdvals: list[Tensor] = []
-
-        for output in cast(list[Dict[str, Tensor]], outputs):
-            svdvals_embeddings = output["svdvals_embeddings"]
-            svdvals.append(svdvals_embeddings)
-
-        svdvals_mean = torch.stack(svdvals).mean(0)
-
-        data = [[x, y] for (x, y) in zip(range(len(svdvals_mean)), svdvals_mean)]
-        table: wandb.data_types.Table = wandb.Table(data=data, columns=["Singular Value Rank Index", "Log of singular values"])  # type: ignore
-        wandb.log(
-            {
-                "singular_values_embeddings": wandb.plot.line(
-                    table,
-                    "Singular Value Rank Index",
-                    "Log of singular values",
-                    title="Singular Values of Embeddings",
-                )
-            }
+        self.log(
+            f"{stage}_loss",
+            loss,
+            on_step=stage == "train",
+            on_epoch=True,
+            batch_size=self.B,
         )
+        self.log_dict(
+            metrics, on_step=stage == "train", on_epoch=True, batch_size=self.B
+        )
+
+        return cast(Tensor, loss)
+
+    def evaluate_dimensionality(self, latent: Tensor) -> dict[str, Tensor]:
+        """Evaluate the dimensionality of the embeddings using PCA."""
+        B, *_ = latent.shape
+
+        latent = latent.view(B, self.num_patches, -1).flatten(0, 1)
+        latent_normalized = torch.nn.functional.normalize(latent, dim=-1)
+        cov_latent = torch.cov(latent_normalized.T)
+        svdvals_latent = torch.linalg.svdvals(cov_latent.float())
+        svdvals_latent = svdvals_latent.log().sort(descending=True)[0]
+
+        return {"svdvals_latent": svdvals_latent}
+
+    # def test_epoch_end(
+    #     self,
+    #     outputs: list[Tensor | dict[str, Any]] | list[list[Tensor | dict[str, Any]]],
+    # ) -> None:
+    #     """TODO: Docstring."""
+    #     if not (
+    #         len(outputs)
+    #         and isinstance(outputs[0], dict)
+    #         and "svdvals_latent" in outputs[0].keys()
+    #     ):
+    #         return
+
+    #     svdvals: list[Tensor] = []
+    #     for output in outputs:
+    #         svdvals_latent = output["svdvals_latent"]
+    #         svdvals.append(svdvals_latent)
+
+    #     svdvals_mean = torch.stack(svdvals).mean(0)
+
+    #     data = [[x, y] for (x, y) in zip(range(len(svdvals_mean)), svdvals_mean)]
+    #     table: wandb.data_types.Table = wandb.Table(data=data, columns=["Singular Value Rank Index", "Log of singular values"])  # type: ignore
+    #     wandb.log(
+    #         {
+    #             "singular_values_latent": wandb.plot.line(
+    #                 table,
+    #                 "Singular Value Rank Index",
+    #                 "Log of singular values",
+    #                 title="Singular Values of Latent Embeddings",
+    #             )
+    #         }
+    #     )
