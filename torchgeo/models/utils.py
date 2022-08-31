@@ -259,18 +259,13 @@ def reduce_mask_token(
             is_mask=True,
             device=x.device,
         )
-        mask_token[:, visible_pos_indices[indices[counts]]] += mask_encoding
 
-        all_patches = torch.arange(num_patches, device=x.device)
-        unreduced_indices = all_patches[(all_patches != indices.view(-1, 1)).all(dim=0)]
+    if keep_unreduced:
+        all_patches = torch.arange(PS, device=x.device)
+        unreduced_indices = all_patches[
+            (all_patches != indices[counts].view(-1, 1)).all(dim=0)
+        ]
         mask_token = torch.cat([mask_token, x[:, unreduced_indices]], dim=1)
-        mask_token[:, num_patches:] += get_encoding(
-            embed_dim=H,
-            num_patches=len(unreduced_indices),
-            mask_enc=True,
-            is_mask=False,
-            device=x.device,
-        )
 
     return mask_token
 
