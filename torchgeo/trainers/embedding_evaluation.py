@@ -158,7 +158,7 @@ class EmbeddingEvaluator(LightningModule):
             else:
                 task = CAETask(**self.hyperparams)
             task.freeze()
-                self.encoder = task.model.encoder
+            self.encoder = task.model.encoder
 
         elif self.hyperparams["task_name"] == "msn":
             if "checkpoint_path" in self.hyperparams and isfile(

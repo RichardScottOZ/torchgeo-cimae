@@ -143,7 +143,12 @@ class MAETask(LightningModule):
             decoder_num_heads=self.hyperparams.get("expander_num_heads", 1),
             mask_tokens_encoder=self.hyperparams.get("mask_tokens_encoder", False),
             mask_tokens_decoder=self.hyperparams.get("mask_tokens_decoder", False),
-            mask_tokens_reduction=self.hyperparams.get("mask_tokens_reduction", False),
+            mask_tokens_reduction_encoder=self.hyperparams.get(
+                "mask_tokens_reduction_encoder", False
+            ),
+            mask_tokens_reduction_decoder=self.hyperparams.get(
+                "mask_tokens_reduction_decoder", False
+            ),
         )
 
         self.mask_fns = self.hyperparams.get("mask_fn", ["random_masking"])

@@ -22,16 +22,24 @@ experiment:
     batch_size: ${experiment.datamodule.batch_size} 
     channel_wise: True
     channel_shuffle: True
-    embed_token: True
-    embed_token_reduction: True
+    mask_tokens_encoder: True
+    mask_tokens_decoder: False
+    mask_tokens_reduction_encoder: True
+    mask_tokens_reduction_decoder: False
     num_in_channels: 4
     num_out_channels: 4
     embed_dim: 256
-    depth: 6
+    depth: 5
     num_heads: 1
+    decoder_depth: 1
+    decoder_num_heads: 1
     mask_fn:
+      - "random_masking_ratio"
       - "random_masking"
     mask_kwargs:
+      random_masking_ratio:
+        ratio: 0.4
+        probability: 1.0
       random_masking:
         num_keep: 256
         probability: 1.0
