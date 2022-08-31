@@ -158,17 +158,7 @@ class EmbeddingEvaluator(LightningModule):
             else:
                 task = CAETask(**self.hyperparams)
             task.freeze()
-            if not self.hyperparams.get("use_expander", False):
                 self.encoder = task.model.encoder
-            else:
-                self.encoder_module = task.model.encoder
-                self.expander_module = task.model.expander
-
-                def encode(item: dict[str, Tensor]) -> Tensor:
-                    item["latent"] = self.encoder_module(item)
-                    return cast(Tensor, self.expander_module(item))
-
-                self.encoder = encode
 
         elif self.hyperparams["task_name"] == "msn":
             if "checkpoint_path" in self.hyperparams and isfile(
@@ -246,9 +236,6 @@ class EmbeddingEvaluator(LightningModule):
                     average="micro",
                     multiclass=False if self.multi_label else None,
                 ),
-                "OverallPrecision": AveragePrecision(
-                    self.hyperparams["num_classes"], average="micro"
-                ),
                 "AveragePrecision": AveragePrecision(
                     self.hyperparams["num_classes"], average="macro"
                 ),
@@ -257,7 +244,19 @@ class EmbeddingEvaluator(LightningModule):
         )
         if not self.multi_label:
             self.train_metrics.add_metrics(
-                JaccardIndex(num_classes=self.hyperparams["num_classes"])
+                {
+                    "JaccardIndex": JaccardIndex(
+                        num_classes=self.hyperparams["num_classes"]
+                    )
+                }
+            )
+        else:
+            self.train_metrics.add_metrics(
+                {
+                    "OverallPrecision": AveragePrecision(
+                        self.hyperparams["num_classes"], average="micro"
+                    )
+                }
             )
 
         self.val_metrics = self.train_metrics.clone(prefix="val_")
@@ -397,7 +396,7 @@ class EmbeddingEvaluator(LightningModule):
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """Perform a test step of the model."""
-        item = self.shared_step("test", *args, **kwargs)
+        _ = self.shared_step("test", *args, **kwargs)
 
         # metrics: dict[str, Tensor] = {}
         # if self.channel_wise:
@@ -410,7 +409,7 @@ class EmbeddingEvaluator(LightningModule):
     ) -> Tensor:
         """TODO: Docstring."""
         y_hat = self.classify(latent)
-        loss = self.classifier_loss(y_hat, y.float())
+        loss = self.classifier_loss(y_hat, y)
 
         if self.multi_label:
             y_hat = y_hat.softmax(dim=-1)
