@@ -172,7 +172,7 @@ class BigEarthNetDataModule(pl.LightningDataModule):
                 pin_memory=self.pin_memory,
                 prefetch_factor=self.prefetch_factor,
                 persistent_workers=self.persistent_workers,
-                drop_last=True
+                drop_last=True,
             )
 
         return DataLoader(
@@ -182,7 +182,7 @@ class BigEarthNetDataModule(pl.LightningDataModule):
             shuffle=True,
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
-            drop_last=True
+            drop_last=True,
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
@@ -195,8 +195,7 @@ class BigEarthNetDataModule(pl.LightningDataModule):
                 shuffle=False,
                 pin_memory=self.pin_memory,
                 prefetch_factor=self.prefetch_factor,
-                persistent_workers=self.persistent_workers,
-                drop_last=True
+                drop_last=True,
             )
 
         return DataLoader(
@@ -205,8 +204,7 @@ class BigEarthNetDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             shuffle=False,
             pin_memory=self.pin_memory,
-            persistent_workers=self.persistent_workers,
-            drop_last=True
+            drop_last=True,
         )
 
     def test_dataloader(self) -> DataLoader[Any]:
@@ -219,7 +217,6 @@ class BigEarthNetDataModule(pl.LightningDataModule):
                 shuffle=False,
                 pin_memory=self.pin_memory,
                 prefetch_factor=self.prefetch_factor,
-                persistent_workers=self.persistent_workers,
             )
 
         return DataLoader(
@@ -228,7 +225,6 @@ class BigEarthNetDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             shuffle=False,
             pin_memory=self.pin_memory,
-            persistent_workers=self.persistent_workers,
         )
 
     def plot(self, *args: Any, **kwargs: Any) -> plt.Figure:

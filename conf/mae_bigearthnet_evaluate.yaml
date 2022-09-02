@@ -1,0 +1,59 @@
+trainer:
+  gpus: [1]
+  max_epochs: 100
+  precision: 32
+  benchmark: True
+  limit_train_batches: 360
+  limit_val_batches: 40 
+experiment:
+  task: "mae_bigearthnet_evaluate"
+  name: "mae_bigearthnet_evaluate"
+  run:
+    fit: True
+    test: True
+  module:
+    task_name: "mae"
+    model: "mae"
+    encoder_name: "vit"
+    sensor: "naip"
+    bands: "all"
+    image_size: 160
+    crop_size: 112
+    patch_size: 8
+    batch_size: ${experiment.datamodule.batch_size}
+    mean_patches: False
+    channel_wise: True
+    multi_label: True
+    in_channels: 14
+    out_channels: 1
+    num_classes: 19
+    load_checkpoint: "last.ckpt"
+    imagenet_pretrained: False
+    lr: 0.02
+    momentum: 0.9
+    weight_decay: 0.000001
+    learning_rate_schedule_patience: 6
+    mask_fn:
+      - "random_masking_ratio"
+      - "random_masking"
+    mask_kwargs:
+      random_masking_ratio:
+        ratio: 0.4
+        probability: 1.0
+      random_masking:
+        num_keep: 256
+        probability: 1.0
+  datamodule:
+    root_dir: "/data/users/mike/data/BigEarthNetFixed"
+    bands: "all"
+    num_classes: 19
+    batch_size: 32
+    num_workers: 8
+    pin_memory: True
+    prefetch_factor: 5
+    persistent_workers: True
+    load_target: True
+logger:
+  name: "wandb"
+  offline: False
+  project_name: "master-thesis"

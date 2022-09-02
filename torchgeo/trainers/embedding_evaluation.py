@@ -99,6 +99,10 @@ class EmbeddingEvaluator(LightningModule):
         crop_size = _to_tuple(self.hyperparams.get("crop_size", image_size))
         num_classes = self.hyperparams["num_classes"]
 
+        self.num_patches = (crop_size[0] // self.patch_size) * (
+            crop_size[1] // self.patch_size
+        )
+
         self.projector: Module | None = None
         if self.hyperparams["task_name"] == "tile2vec":
             if "checkpoint_path" in self.hyperparams and isfile(
@@ -195,20 +199,17 @@ class EmbeddingEvaluator(LightningModule):
         if isinstance(output, Sequence):
             output = output[0]
         output = output.reshape(2, -1)
-
         if self.projector is not None:
             output = self.projector(output)
-
         out_dim = output.shape[1]
 
         if self.mean_patches:
-            self.num_patches = (crop_size[0] // self.patch_size) * (
-                crop_size[1] // self.patch_size
-            )
             out_dim = output.view(2, self.num_patches * self.out_channels, -1).shape[-1]
 
         self.classifier = Linear(
-            out_dim if not self.channel_wise else out_dim * self.out_channels,
+            out_dim
+            if not self.channel_wise or not self.mean_patches
+            else out_dim * self.out_channels,
             num_classes,
         )
         self.classifier.weight.data.normal_(mean=0.0, std=0.01)
@@ -409,7 +410,7 @@ class EmbeddingEvaluator(LightningModule):
     ) -> Tensor:
         """TODO: Docstring."""
         y_hat = self.classify(latent)
-        loss = self.classifier_loss(y_hat, y)
+        loss = self.classifier_loss(y_hat, y.float())
 
         if self.multi_label:
             y_hat = y_hat.softmax(dim=-1)
