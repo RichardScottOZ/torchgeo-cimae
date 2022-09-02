@@ -1,41 +1,39 @@
 trainer:
   gpus: [1]
-  max_epochs: 100
+  max_epochs: 20
   precision: 32
   benchmark: True
-  replace_sampler_ddp: False
-  limit_train_batches: 800
-  limit_val_batches: 50 
+  limit_train_batches: 360
+  limit_val_batches: 40 
 experiment:
-  task: "mae_bigearthnet_train"
-  name: "mae_bigearthnet_train"
+  task: "cae_bigearthnet_evaluate"
+  name: "cae_bigearthnet_evaluate"
   run:
     fit: True
-    test: False
+    test: True
   module:
-    model: "mae"
+    task_name: "cae"
+    model: "cae"
     encoder_name: "vit"
     sensor: "naip"
-    imagenet_pretrained: False
-    pretrained: False
+    bands: "all"
     image_size: 120
     crop_size: 112
     patch_size: 8
-    batch_size: ${experiment.datamodule.batch_size} 
+    batch_size: ${experiment.datamodule.batch_size}
+    mean_patches: False
     channel_wise: True
-    channel_shuffle: True
-    mask_tokens_encoder: True
-    mask_tokens_decoder: False
-    mask_tokens_reduction_encoder: True
-    mask_tokens_reduction_decoder: False
-    num_in_channels: 14
-    num_out_channels: 14
-    embed_dim: 1024
-    depth: 6
-    num_heads: 1
-    decoder_depth: 1
-    decoder_num_heads: 1
-    mask_fns:
+    multi_label: True
+    in_channels: 14
+    out_channels: 1
+    num_classes: 19
+    load_checkpoint: "last.ckpt"
+    imagenet_pretrained: False
+    lr: 0.02
+    momentum: 0.9
+    weight_decay: 0.000001
+    learning_rate_schedule_patience: 6
+    mask_fn:
       - "random_masking_ratio"
       - "random_masking"
     mask_kwargs:
@@ -49,12 +47,12 @@ experiment:
     root_dir: "/data/users/mike/data/BigEarthNetFixed"
     bands: "all"
     num_classes: 19
-    batch_size: 64
+    batch_size: 32
     num_workers: 8
     pin_memory: True
     prefetch_factor: 5
     persistent_workers: True
-    load_target: False
+    load_target: True
 logger:
   name: "wandb"
   offline: False

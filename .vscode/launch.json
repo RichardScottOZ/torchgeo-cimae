@@ -273,7 +273,7 @@
                 "program.log_dir=/data/users/mike/logs",
                 "program.overwrite=False",
                 "logger.offline=True",
-                "trainer.gpus=[0]"
+                "trainer.gpus=[1]"
             ],
             "justMyCode": true
         },
@@ -285,6 +285,40 @@
             "console": "integratedTerminal",
             "args": [
                 "config_file=conf/mae_bigearthnet_evaluate.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=False",
+                "logger.offline=True",
+                "trainer.gpus=[1]"
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: cae_bigearthnet_train",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/cae_bigearthnet_train.yaml",
+                "program.seed=666",
+                "program.output_dir=/data/users/mike/experiments",
+                "program.log_dir=/data/users/mike/logs",
+                "program.overwrite=False",
+                "logger.offline=True",
+                "trainer.gpus=[0]"
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Python: cae_bigearthnet_evaluate",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "args": [
+                "config_file=conf/cae_bigearthnet_evaluate.yaml",
                 "program.seed=666",
                 "program.output_dir=/data/users/mike/experiments",
                 "program.log_dir=/data/users/mike/logs",

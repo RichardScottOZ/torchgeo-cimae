@@ -7,13 +7,13 @@ trainer:
   limit_train_batches: 800
   limit_val_batches: 50 
 experiment:
-  task: "mae_bigearthnet_train"
-  name: "mae_bigearthnet_train"
+  task: "cae_bigearthnet_train"
+  name: "cae_bigearthnet_train"
   run:
     fit: True
     test: False
   module:
-    model: "mae"
+    model: "cae"
     encoder_name: "vit"
     sensor: "naip"
     imagenet_pretrained: False
@@ -24,10 +24,10 @@ experiment:
     batch_size: ${experiment.datamodule.batch_size} 
     channel_wise: True
     channel_shuffle: True
-    mask_tokens_encoder: True
-    mask_tokens_decoder: False
-    mask_tokens_reduction_encoder: True
-    mask_tokens_reduction_decoder: False
+    mask_tokens_encoder: False
+    mask_tokens_decoder: True
+    mask_tokens_reduction_encoder: False
+    mask_tokens_reduction_decoder: True
     num_in_channels: 14
     num_out_channels: 14
     embed_dim: 1024
@@ -52,7 +52,7 @@ experiment:
     batch_size: 64
     num_workers: 8
     pin_memory: True
-    prefetch_factor: 5
+    prefetch_factor: 10
     persistent_workers: True
     load_target: False
 logger:

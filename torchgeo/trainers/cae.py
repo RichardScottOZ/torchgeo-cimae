@@ -14,7 +14,9 @@ from torch.nn.modules import Module, Sequential
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchvision.utils import make_grid
 
-from ..models import ReducingMaskedAutoencoderViT
+from torchgeo.models.utils import reduce_mask_token
+
+from ..models import MaskedAutoencoderViT
 from ..utils import _to_tuple
 from .utils import generate_mask, pad_imgs_dims, patchify, unpatchify
 
@@ -46,8 +48,6 @@ def masked_reconstruction_loss(
 
 def reconstruction_loss(target: Tensor, pred: Tensor, patch_size: int) -> Tensor:
     """Compute masked reconstruction loss."""
-    B, *_ = pred.shape
-
     target = patchify(target, patch_size)
     target = target.view(pred.shape)
 
@@ -128,7 +128,7 @@ class CAETask(LightningModule):
         self.B = self.hyperparams.get("batch_size", 64)
         self.num_patches = (self.crop_size // self.patch_size) ** 2
 
-        self.model = ReducingMaskedAutoencoderViT(
+        self.model = MaskedAutoencoderViT(
             sensor=self.hyperparams["sensor"],
             bands=self.hyperparams.get("bands", "all"),
             image_size=self.crop_size,
@@ -139,11 +139,19 @@ class CAETask(LightningModule):
             num_heads=self.hyperparams.get("num_heads", 16),
             dropout_rate=self.hyperparams.get("dropout_rate", 0.0),
             dropout_attn=self.hyperparams.get("dropout_attn", 0.0),
-            expander_depth=self.hyperparams.get("expander_depth", 2),
-            expander_num_heads=self.hyperparams.get("expander_num_heads", 1),
+            decoder_depth=self.hyperparams.get("expander_depth", 2),
+            decoder_num_heads=self.hyperparams.get("expander_num_heads", 1),
+            mask_tokens_encoder=self.hyperparams.get("mask_tokens_encoder", False),
+            mask_tokens_decoder=self.hyperparams.get("mask_tokens_decoder", False),
+            mask_tokens_reduction_encoder=self.hyperparams.get(
+                "mask_tokens_reduction_encoder", False
+            ),
+            mask_tokens_reduction_decoder=self.hyperparams.get(
+                "mask_tokens_reduction_decoder", False
+            ),
         )
 
-        self.mask_fns = self.hyperparams.get("mask_fn", ["random_masking"])
+        self.mask_fns = self.hyperparams.get("mask_fns", ["random_masking"])
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
@@ -222,13 +230,11 @@ class CAETask(LightningModule):
         """
         return self.model(*args, **kwargs)
 
-    def shared_step(
-        self, stage: str | None = None, *args: Any, **kwargs: Any
-    ) -> dict[str, Tensor]:
+    def shared_step(self, stage: str, *args: Any, **kwargs: Any) -> dict[str, Tensor]:
         """TODO: Docstring."""
         batch = args[0]
         x = batch["image"]
-        B, self.C, *_ = x.shape
+        _, self.C, *_ = x.shape
 
         with torch.no_grad():
             item = self.get_item(x, stage)
@@ -244,7 +250,7 @@ class CAETask(LightningModule):
             item["loss"],
             on_step=stage == "train",
             on_epoch=True,
-            batch_size=B,
+            batch_size=self.B,
             sync_dist=stage != "train",
         )
 
@@ -260,26 +266,26 @@ class CAETask(LightningModule):
         input = target.clone()
         encoder_channels = decoder_channels = []
 
-        if self.channel_shuffle:
-            encoder_channels = torch.randperm(self.C, device=x.device).tolist()[
-                : self.num_in_channels
-            ]
-            decoder_channels = torch.randperm(self.C, device=x.device).tolist()[
-                : self.num_out_channels
-            ]
-
-            input = input[:, encoder_channels]
-            target = target[:, decoder_channels]
-            mask = mask[encoder_channels].flatten()
-
         if self.channel_wise:
-            if not self.channel_shuffle:
+            if self.channel_shuffle:
+                encoder_channels = torch.randperm(self.C, device=x.device).tolist()[
+                    : self.num_in_channels
+                ]
+                decoder_channels = torch.randperm(self.C, device=x.device).tolist()[
+                    : self.num_out_channels
+                ]
+
+                input = input[:, encoder_channels]
+                target = target[:, decoder_channels]
+                mask = mask[encoder_channels]
+            else:
                 encoder_channels = decoder_channels = torch.arange(
                     self.C, device=x.device
                 ).tolist()
 
             input = input.flatten(0, 1).unsqueeze(1)
             target = target.flatten(0, 1).unsqueeze(1)
+            mask = mask.flatten()
 
         return {
             "input": input,
@@ -311,7 +317,7 @@ class CAETask(LightningModule):
         item = self.shared_step("val", *args, **kwargs)
 
         # Only log images of first batch
-        if args[1] > 0 or self.device.index != 1:
+        if args[1] > 0 or self.trainer.num_devices > 1 and self.device.index != 1:
             return {}
 
         images = self.prepare_output(item)
@@ -329,43 +335,41 @@ class CAETask(LightningModule):
         Returns:
             output from the model
         """
-        input, target, pred, mask, latent = (
+        input, target, pred, mask = (
             item["input"],
             item["target"],
             item["pred"],
             item["mask"],
-            item["latent"],
         )
 
         if self.channel_wise:
             pred = pred.view(self.B * self.num_out_channels, self.num_patches, -1)
-            mask = mask.view(self.num_in_channels, -1).repeat(self.B, 1)
 
-        target_patch = patchify(input, self.patch_size)
-        mask_expanded = (~mask.bool()).unsqueeze(-1).expand(target_patch.shape)
-        masked_target = torch.zeros_like(target_patch, device=input.device)
-        masked_target[mask_expanded] = target_patch[mask_expanded]
+        input_patch = patchify(input, self.patch_size).view(
+            self.B, self.num_in_channels * self.num_patches, -1
+        )
+        input_patch = input_patch[:, ~mask]
+        *_, H = input_patch.shape
+
+        masked_input = torch.zeros((self.B, self.num_patches, H), device=input.device)
+        masked_input = reduce_mask_token(
+            input_patch, mask, masked_input, self.num_patches
+        )
 
         pred = unpatchify(pred, self.patch_size)
-        masked_target = unpatchify(masked_target, self.patch_size)
-        latent = unpatchify(latent, min(int(self.embed_dim**0.5), self.patch_size))
-
-        latent -= latent.min()
-        latent /= latent.amax()
-        pred -= pred.min()
-        pred /= pred.amax()
+        masked_input = unpatchify(masked_input, self.patch_size).repeat(1, 3, 1, 1)
 
         if self.channel_wise:
             target = target.view(self.B, -1, self.crop_size, self.crop_size)[:, :3]
             input = input.view(self.B, -1, self.crop_size, self.crop_size)[:, :3]
-            masked_target = masked_target.view(
+            masked_input = masked_input.view(
                 self.B, -1, self.crop_size, self.crop_size
             )[:, :3]
             pred = pred.view(self.B, -1, self.crop_size, self.crop_size)[:, :3]
 
-        images = pad_imgs_dims([input, masked_target, pred, target], 3)
+        images = pad_imgs_dims([input, masked_input, pred, target], 3)
 
-        return {"images": images, "latent": latent}
+        return {"images": images}
 
     def validation_epoch_end(
         self,
@@ -373,7 +377,7 @@ class CAETask(LightningModule):
         | list[list[Tensor | dict[str, Any]]],
     ) -> None:
         """Log images."""
-        if self.device.index != 1:
+        if self.trainer.num_devices > 1 and self.device.index != 1:
             return
 
         images = validation_step_outputs[0]["images"]  # type: ignore
@@ -382,14 +386,6 @@ class CAETask(LightningModule):
         images_grid = wandb.Image(grid, caption="Images")
 
         self.logger.experiment.log({"Images": images_grid})
-
-        latent = validation_step_outputs[0]["latent"]  # type: ignore
-        latent = latent[:8].flatten(0, 1).unsqueeze(1)
-
-        latent_grid = make_grid(latent)
-        latent_grid = wandb.Image(latent_grid, caption="Latent")
-
-        self.logger.experiment.log({"Latent": latent_grid})
 
     def test_step(self, *args: Any, **kwargs: Any) -> Any:
         """No-op, does nothing."""
