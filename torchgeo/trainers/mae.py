@@ -151,7 +151,7 @@ class MAETask(LightningModule):
             ),
         )
 
-        self.mask_fns = self.hyperparams.get("mask_fn", ["random_masking"])
+        self.mask_fns = self.hyperparams.get("mask_fns", ["random_masking"])
         self.mask_kwargs = self.hyperparams.get(
             "mask_kwargs",
             {
@@ -241,8 +241,8 @@ class MAETask(LightningModule):
 
         item = self.forward(item)
 
-        item["loss"] = reconstruction_loss(
-            item["target"], item["pred"], self.patch_size
+        item["loss"] = masked_reconstruction_loss(
+            item["target"], item["pred"], item["mask_target"], self.patch_size
         )
 
         self.log(
@@ -259,38 +259,42 @@ class MAETask(LightningModule):
     def get_item(self, x: Tensor, stage: str) -> dict[str, Any]:
         """Preparation of the data for the forward pass."""
         target = self.augment(x, stage)
-        mask = generate_mask(
+        mask_input = generate_mask(
             self.mask_fns, self.mask_kwargs, self.num_patches, self.C, x.device
         )
 
         input = target.clone()
+        mask_target = mask_input
         encoder_channels = decoder_channels = []
 
-        if self.channel_shuffle:
-            encoder_channels = torch.randperm(self.C, device=x.device).tolist()[
-                : self.num_in_channels
-            ]
-            decoder_channels = torch.randperm(self.C, device=x.device).tolist()[
-                : self.num_out_channels
-            ]
-
-            input = input[:, encoder_channels]
-            target = target[:, decoder_channels]
-            mask = mask[encoder_channels].flatten()
-
         if self.channel_wise:
-            if not self.channel_shuffle:
+            if self.channel_shuffle:
+                encoder_channels = torch.randperm(self.C, device=x.device).tolist()[
+                    : self.num_in_channels
+                ]
+                decoder_channels = torch.randperm(self.C, device=x.device).tolist()[
+                    : self.num_out_channels
+                ]
+
+                input = input[:, encoder_channels]
+                target = target[:, decoder_channels]
+                mask_input = mask_input[encoder_channels]
+                mask_target = mask_target[decoder_channels]
+            else:
                 encoder_channels = decoder_channels = torch.arange(
                     self.C, device=x.device
                 ).tolist()
 
             input = input.flatten(0, 1).unsqueeze(1)
             target = target.flatten(0, 1).unsqueeze(1)
+            mask_input = mask_input.flatten()
+            mask_target = mask_target.flatten()
 
         return {
             "input": input,
             "target": target,
-            "mask": mask,
+            "mask": mask_input,
+            "mask_target": mask_target,
             "encoder_channels": encoder_channels,
             "decoder_channels": decoder_channels,
         }
@@ -335,7 +339,7 @@ class MAETask(LightningModule):
         Returns:
             output from the model
         """
-        input, target, pred, mask = (
+        input, target, pred, mask_input = (
             item["input"],
             item["target"],
             item["pred"],
@@ -348,12 +352,12 @@ class MAETask(LightningModule):
         input_patch = patchify(input, self.patch_size).view(
             self.B, self.num_in_channels * self.num_patches, -1
         )
-        input_patch = input_patch[:, ~mask]
+        input_patch = input_patch[:, ~mask_input]
         *_, H = input_patch.shape
 
         masked_input = torch.zeros((self.B, self.num_patches, H), device=input.device)
         masked_input = reduce_mask_token(
-            input_patch, mask, masked_input, self.num_patches
+            input_patch, mask_input, masked_input, self.num_patches
         )
 
         pred = unpatchify(pred, self.patch_size)

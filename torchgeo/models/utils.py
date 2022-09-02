@@ -151,7 +151,7 @@ def get_channel_encoding(
     return channel_encoding
 
 
-@lru_cache(128)
+# @lru_cache(128)
 def get_encoding(
     embed_dim: int,
     num_patches: int,
@@ -208,7 +208,7 @@ def get_encoding(
 
 
 @lru_cache(10)
-def get_mask_token(
+def get_mask_tokens(
     embed_dim: int,
     num_patches: int,
     channel_enc: bool = False,
@@ -217,8 +217,8 @@ def get_mask_token(
     device: str | torch.device = "cpu",
 ) -> Tensor:
     """Get the mask token."""
-    mask_token = -torch.ones(num_patches, embed_dim, device=device)
-    mask_token += get_encoding(
+    mask_tokens = -torch.ones(num_patches, embed_dim, device=device)
+    mask_tokens += get_encoding(
         embed_dim=embed_dim,
         num_patches=num_patches,
         channel_wise=channel_wise,
@@ -228,13 +228,13 @@ def get_mask_token(
         is_embed=True if embed_enc else None,
         device=device,
     )
-    return mask_token
+    return mask_tokens
 
 
 def reduce_mask_token(
     x: Tensor,
     mask: Tensor,
-    mask_token: Tensor,
+    mask_tokens: Tensor,
     num_patches: int,
     keep_unreduced: bool = False,
 ) -> Tensor:
@@ -248,9 +248,9 @@ def reduce_mask_token(
     counts = counts.cumsum(dim=0)[:-1]
     counts = torch.cat([torch.zeros(1, dtype=counts.dtype, device=x.device), counts])
 
-    mask_token[:, visible_pos_indices[indices[counts]]] = x[:, indices[counts]]
+    mask_tokens[:, visible_pos_indices[indices[counts]]] = x[:, indices[counts]]
     # Mark as mask tokens
-    mask_token[:, visible_pos_indices[indices[counts]]] += get_encoding(
+    mask_tokens[:, visible_pos_indices[indices[counts]]] += get_encoding(
         embed_dim=H,
         num_patches=len(counts),
         embed_enc=True,
@@ -263,9 +263,9 @@ def reduce_mask_token(
         unreduced_indices = all_patches[
             (all_patches != indices[counts].view(-1, 1)).all(dim=0)
         ]
-        mask_token = torch.cat([mask_token, x[:, unreduced_indices]], dim=1)
+        mask_tokens = torch.cat([mask_tokens, x[:, unreduced_indices]], dim=1)
 
-    return mask_token
+    return mask_tokens
 
 
 def add_embed_encoding(

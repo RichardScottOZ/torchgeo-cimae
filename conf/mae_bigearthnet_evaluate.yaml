@@ -17,7 +17,7 @@ experiment:
     encoder_name: "vit"
     sensor: "naip"
     bands: "all"
-    image_size: 160
+    image_size: 120
     crop_size: 112
     patch_size: 8
     batch_size: ${experiment.datamodule.batch_size}

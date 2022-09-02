@@ -424,9 +424,7 @@ class EmbeddingEvaluator(LightningModule):
             on_epoch=True,
             batch_size=self.B,
         )
-        self.log_dict(
-            metrics, on_step=stage == "train", on_epoch=True, batch_size=self.B
-        )
+        self.log_dict(metrics, on_step=stage != "val", on_epoch=True, batch_size=self.B)
 
         return cast(Tensor, loss)
 
