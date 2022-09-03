@@ -76,7 +76,7 @@ def get_1d_sincos_pos_embed_from_grid(
     omega = 1.0 / 10000**omega  # (D/2,)
 
     pos = pos.reshape(-1)  # (M,)
-    out = torch.einsum("m,d->md", pos, omega)  # (M, D/2), outer product
+    out = torch.einsum("m,d->md", pos, omega)  # type: ignore[no-untyped-call]
 
     emb_sin = torch.sin(out)  # (M, D/2)
     emb_cos = torch.cos(out)  # (M, D/2)
@@ -118,7 +118,10 @@ def get_positional_encodings(
 
 
 def get_channel_encodings(
-    embed_dim: int, channels: tuple[int], num_patches: int, device: str | torch.device
+    embed_dim: int,
+    channels: tuple[int, ...],
+    num_patches: int,
+    device: str | torch.device,
 ) -> Tensor:
     """Get the channel encodings for the given channels."""
     channels_sorted, channel_order = torch.tensor(
@@ -136,8 +139,12 @@ def get_channel_encodings(
     return channel_encoding
 
 
+# @lru_cache(128)
 def get_channel_encoding(
-    embed_dim: int, channels: tuple[int], num_patches: int, device: str | torch.device
+    embed_dim: int,
+    channels: tuple[int, ...],
+    num_patches: int,
+    device: str | torch.device,
 ) -> Tensor:
     """Get the channel encodings for the given channels."""
     channel_encoding = get_1d_sincos_pos_embed_from_grid(
@@ -151,83 +158,20 @@ def get_channel_encoding(
     return channel_encoding
 
 
-# @lru_cache(128)
-def get_encoding(
-    embed_dim: int,
-    num_patches: int,
-    channel_wise: bool = False,
-    embed_enc: bool = False,
-    return_pos_enc: bool = False,
-    channels: tuple[int] | None = None,
-    is_embed: bool | None = None,
-    device: str | torch.device = "cpu",
-    channel_ratio_div: int = 4,
-    mask_ratio_div: int = 16,
-) -> Tensor:
-    """Get the encoding for the given channels."""
-    encoding = torch.zeros((num_patches, embed_dim), dtype=torch.float, device=device)
-
-    pos_embed_dim = embed_dim
-    channel_embed_dim = embed_dim
-    embed_embed_dim = embed_dim
-
-    if channel_wise:
-        channel_embed_dim //= channel_ratio_div
-        pos_embed_dim -= channel_embed_dim
-
-    if embed_enc:
-        embed_embed_dim = embed_dim // mask_ratio_div
-        channel_embed_dim -= embed_embed_dim
-
-    if return_pos_enc:
-        encoding[..., :pos_embed_dim] = get_positional_encodings(
-            pos_embed_dim, num_patches, channel_wise, device
-        )
-
-    if channel_wise and channels is not None:
-        channel_encoding = get_channel_encodings(
-            channel_embed_dim, channels, num_patches, device=device
-        )
-        encoding = encoding.repeat(len(channels), 1)
-
-        encoding[
-            ..., pos_embed_dim : pos_embed_dim + channel_embed_dim
-        ] = channel_encoding
-
-    if embed_enc and is_embed is not None:
-        mask_encoding = get_channel_encoding(
-            embed_embed_dim, (int(is_embed),), num_patches, device=device
-        )
-
-        if channel_wise and channels is not None:
-            mask_encoding = mask_encoding.repeat(len(channels), 1)
-
-        encoding[..., -embed_embed_dim:] = mask_encoding
-
-    return encoding
-
-
 @lru_cache(10)
 def get_mask_tokens(
     embed_dim: int,
     num_patches: int,
-    channel_enc: bool = False,
-    embed_enc: bool = False,
     channel_wise: bool = False,
     device: str | torch.device = "cpu",
 ) -> Tensor:
     """Get the mask token."""
     mask_tokens = -torch.ones(num_patches, embed_dim, device=device)
-    mask_tokens += get_encoding(
-        embed_dim=embed_dim,
-        num_patches=num_patches,
-        channel_wise=channel_wise,
-        embed_enc=True,
-        return_pos_enc=True,
-        channels=(0,) if channel_enc else None,
-        is_embed=True if embed_enc else None,
-        device=device,
+    mask_tokens += get_positional_encodings(
+        embed_dim, num_patches, channel_wise, device
     )
+    if channel_wise:
+        mask_tokens += get_channel_encodings(embed_dim, (0,), num_patches, device)
     return mask_tokens
 
 
@@ -239,7 +183,7 @@ def reduce_mask_token(
     keep_unreduced: bool = False,
 ) -> Tensor:
     """Reduce the embed token by using the values not masked in place."""
-    _, PS, H = x.shape
+    _, PS, _ = x.shape
     mask = mask.view(-1, num_patches)  # (C, P)
 
     visible_pos_indices = (~mask).nonzero()[:, 1]
@@ -249,14 +193,6 @@ def reduce_mask_token(
     counts = torch.cat([torch.zeros(1, dtype=counts.dtype, device=x.device), counts])
 
     mask_tokens[:, visible_pos_indices[indices[counts]]] = x[:, indices[counts]]
-    # Mark as mask tokens
-    mask_tokens[:, visible_pos_indices[indices[counts]]] += get_encoding(
-        embed_dim=H,
-        num_patches=len(counts),
-        embed_enc=True,
-        is_embed=True,
-        device=x.device,
-    )
 
     if keep_unreduced:
         all_patches = torch.arange(PS, device=x.device)
@@ -266,42 +202,3 @@ def reduce_mask_token(
         mask_tokens = torch.cat([mask_tokens, x[:, unreduced_indices]], dim=1)
 
     return mask_tokens
-
-
-def add_embed_encoding(
-    x: Tensor, mask: Tensor, num_patches: int, channel_wise: bool
-) -> Tensor:
-    """Get the reduced and unreduced indices for the given mask."""
-    *_, H = x.shape
-    mask = mask.view(-1, num_patches)  # (C, P)
-
-    visible_pos_indices = (~mask).nonzero()[:, 1]
-    sorted_visible, indices = visible_pos_indices.sort(stable=True)
-    _, counts = sorted_visible.unique_consecutive(return_counts=True)  # type: ignore
-    counts = counts.cumsum(dim=0)[:-1]
-    counts = torch.cat([torch.zeros(1, dtype=counts.dtype, device=x.device), counts])
-
-    # Mark as embed tokens
-    x[:, indices[counts]] += get_encoding(
-        embed_dim=H,
-        num_patches=len(counts),
-        embed_enc=True,
-        is_embed=True,
-        device=x.device,
-    )
-
-    return x
-
-
-def get_encoding_masked(
-    mask: Tensor, num_patches: int, embed_dim: int, channel_wise: bool
-) -> Tensor:
-    """Get the encoding for the input given the corresponding mask."""
-    return get_encoding(
-        embed_dim,
-        num_patches,
-        channel_wise,
-        embed_enc=True,
-        return_pos_enc=True,
-        device=mask.device,
-    ).repeat(len(mask) // num_patches, 1)[~mask]

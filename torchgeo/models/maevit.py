@@ -8,10 +8,9 @@ from torch import Tensor
 from torch.nn import Conv2d, LayerNorm, Module, Sequential
 
 from .utils import (
-    add_embed_encoding,
-    get_encoding,
-    get_encoding_masked,
     get_mask_tokens,
+    get_positional_encodings,
+    get_channel_encodings,
     init_weights,
     reduce_mask_token,
 )
@@ -75,7 +74,7 @@ class EncoderEmbedding(Module):
 
         self.apply(init_weights)
 
-    def forward(self, x: Tensor, channels: list[int] = []) -> Tensor:
+    def forward(self, x: Tensor, channels: tuple[int, ...] = ()) -> Tensor:
         """Forward pass of the encoder embedding module.
 
         First embed the image to patches.
@@ -86,20 +85,13 @@ class EncoderEmbedding(Module):
 
         B, H, PW, _ = x.shape
         x = x.view(B, H, PW**2).permute(0, 2, 1)  # BxCxPSxPS -> BxPxH
-
         *_, H = x.shape
+
+        x += get_positional_encodings(H, self.num_patches, self.channel_wise, x.device)
+
         if self.channel_wise:
             x = x.reshape(-1, len(channels) * PW**2, H)
-
-        x += get_encoding(
-            embed_dim=H,
-            num_patches=self.num_patches,
-            channel_wise=self.channel_wise,
-            embed_enc=self.mask_tokens_encoder,
-            return_pos_enc=True,
-            channels=tuple(channels),
-            device=x.device,
-        )
+            x += get_channel_encodings(H, channels, self.num_patches, x.device)
 
         return x
 
@@ -129,7 +121,7 @@ class MaskedEncoderViT(Module):
         self.channel_wise = channel_wise
         self.use_mask_tokens_encoder = mask_tokens_encoder
         self.use_mask_tokens_decoder = mask_tokens_decoder
-        self.mask_tokens_reduction_encoder = mask_tokens_reduction_encoder
+        self.mask_tokens_reduction = mask_tokens_reduction_encoder
 
         self.embed_module = EncoderEmbedding(
             in_channels,
@@ -155,22 +147,17 @@ class MaskedEncoderViT(Module):
             mask_tokens = get_mask_tokens(
                 self.embed_dim,
                 self.num_patches,
-                channel_enc=True,
-                embed_enc=True,
                 channel_wise=self.channel_wise,
                 device=x.device,
             ).repeat(B, 1, 1)
 
-            if self.mask_tokens_reduction_encoder:
+            if self.mask_tokens_reduction:
                 if mask is not None:
                     x = reduce_mask_token(
                         x, mask, mask_tokens, self.num_patches, keep_unreduced=True
                     )
             else:
                 x = torch.cat([mask_tokens, x], dim=1)
-
-        if self.use_mask_tokens_decoder and mask is not None:
-            x = add_embed_encoding(x, mask, self.num_patches, self.channel_wise)
 
         return x
 
@@ -186,7 +173,7 @@ class MaskedEncoderViT(Module):
         if mask is not None:
             x = x[:, ~mask]
 
-        if self.use_mask_tokens_encoder or self.use_mask_tokens_decoder:
+        if self.use_mask_tokens_encoder:
             x = self.apply_mask_tokens(x, mask)
 
         x = self.encoder(x)
@@ -209,18 +196,11 @@ class DecoderEmbedding(Module):
 
         self.num_patches = num_patches
 
-    def forward(self, x: Tensor, channels: list[int] = []) -> Tensor:
+    def forward(self, x: Tensor, channels: tuple[int, ...] = ()) -> Tensor:
         """Embed the decoder input with channel encodings."""
         if len(channels):
             *_, H = x.shape
-            x += get_encoding(
-                embed_dim=H,
-                num_patches=self.num_patches,
-                channel_wise=True,
-                embed_enc=True,
-                channels=tuple(channels),
-                device=x.device,
-            )
+            x += get_channel_encodings(H, channels, self.num_patches, x.device)
 
         return x
 
@@ -238,6 +218,7 @@ class MaskedDecoderViT(Module):
         mask_tokens_decoder: bool = False,
         mask_tokens_reduction_encoder: bool = False,
         mask_tokens_reduction_decoder: bool = True,
+        keep_unreduced_decoder: bool = False,
         depth: int = 2,
         num_heads: int = 1,
         dropout_rate: float = 0.0,
@@ -249,6 +230,7 @@ class MaskedDecoderViT(Module):
         self.mask_tokens_decoder = mask_tokens_decoder
         self.mask_tokens_reduction_encoder = mask_tokens_reduction_encoder
         self.mask_tokens_reduction_decoder = mask_tokens_reduction_decoder
+        self.keep_unreduced_decoder = keep_unreduced_decoder
         self.num_patches = num_patches
         self.embed_dim = embed_dim
         self.channel_wise = channel_wise
@@ -278,25 +260,23 @@ class MaskedDecoderViT(Module):
             mask_tokens = get_mask_tokens(
                 self.embed_dim,
                 self.num_patches,
-                channel_enc=False,
-                embed_enc=True,
                 channel_wise=self.channel_wise,
                 device=x.device,
             ).repeat(B, 1, 1)
 
-            # Select only the special embed tokens
-            if not self.mask_tokens_reduction_encoder:
-                mask = mask.view(-1, self.num_patches)
-                mask = (~mask).sum(dim=0) == 0
-                x = x[:, : int((~mask).sum())]
-
             # Re-apply positional encoding
-            x += get_encoding_masked(
-                mask, self.num_patches, self.embed_dim, self.channel_wise
-            )
+            x += get_positional_encodings(
+                self.embed_dim, self.num_patches, self.channel_wise, x.device
+            ).repeat(len(mask) // self.num_patches, 1)[~mask]
 
             if self.mask_tokens_reduction_decoder:
-                x = reduce_mask_token(x, mask, mask_tokens, self.num_patches)
+                x = reduce_mask_token(
+                    x,
+                    mask,
+                    mask_tokens,
+                    self.num_patches,
+                    keep_unreduced=self.keep_unreduced_decoder,
+                )
             else:
                 x = torch.cat([mask_tokens, x], dim=1)
 
@@ -354,6 +334,7 @@ class MaskedAutoencoderViT(Module):
         mask_tokens_decoder: bool = True,
         mask_tokens_reduction_encoder: bool = True,
         mask_tokens_reduction_decoder: bool = True,
+        keep_unreduced_decoder: bool = False,
     ) -> None:
         """Initialize a new VisionTransformer model."""
         super().__init__()
@@ -384,6 +365,7 @@ class MaskedAutoencoderViT(Module):
             mask_tokens_decoder=mask_tokens_decoder,
             mask_tokens_reduction_encoder=mask_tokens_reduction_encoder,
             mask_tokens_reduction_decoder=mask_tokens_reduction_decoder,
+            keep_unreduced_decoder=keep_unreduced_decoder,
             depth=decoder_depth,
             num_heads=decoder_num_heads,
         )

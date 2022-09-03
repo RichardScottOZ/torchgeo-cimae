@@ -1,6 +1,6 @@
 trainer:
   gpus: [1]
-  max_epochs: 100
+  max_epochs: 800
   precision: 32
   benchmark: True
   replace_sampler_ddp: False
@@ -24,14 +24,15 @@ experiment:
     batch_size: ${experiment.datamodule.batch_size} 
     channel_wise: True
     channel_shuffle: True
-    mask_tokens_encoder: True
-    mask_tokens_decoder: False
-    mask_tokens_reduction_encoder: True
-    mask_tokens_reduction_decoder: False
+    mask_tokens_encoder: False
+    mask_tokens_decoder: True
+    mask_tokens_reduction_encoder: False
+    mask_tokens_reduction_decoder: True
+    keep_unreduced_decoder: False
     num_in_channels: 14
     num_out_channels: 14
-    embed_dim: 1024
-    depth: 6
+    embed_dim: 786
+    depth: 5
     num_heads: 1
     decoder_depth: 1
     decoder_num_heads: 1
@@ -43,7 +44,7 @@ experiment:
         ratio: 0.4
         probability: 1.0
       random_masking:
-        num_keep: 256
+        num_keep: 384
         probability: 1.0
   datamodule:
     root_dir: "/data/users/mike/data/BigEarthNetFixed"

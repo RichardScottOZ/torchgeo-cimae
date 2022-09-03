@@ -26,7 +26,11 @@ Module.__module__ = "torch.nn"
 
 
 def masked_reconstruction_loss(
-    target: Tensor, pred: Tensor, mask: Tensor, patch_size: int
+    target: Tensor,
+    pred: Tensor,
+    mask: Tensor,
+    patch_size: int,
+    norm_pix_loss: bool = False,
 ) -> Tensor:
     """Compute masked reconstruction loss."""
     B, *_ = pred.shape
@@ -34,14 +38,15 @@ def masked_reconstruction_loss(
     target = patchify(target, patch_size)
     target = target.view(pred.shape)
 
+    if norm_pix_loss:
+        mean = target.mean(dim=-1, keepdim=True)
+        var = target.var(dim=-1, keepdim=True)
+        target = (target - mean) / (var + 1.0e-6) ** 0.5
+
     loss = (pred - target) ** 2
     loss = loss.mean(dim=-1)  # [N, L], mean loss per patch
 
-    num_hidden = mask.sum()
-    if num_hidden == 0:
-        return cast(Tensor, loss.mean())
-
-    loss = (loss * mask).sum() / (B * num_hidden)  # mean loss on removed patches
+    loss = (loss * mask).sum() / (B * mask.sum())  # mean loss on removed patches
 
     return cast(Tensor, loss)
 
@@ -127,6 +132,7 @@ class MAETask(LightningModule):
         self.num_out_channels = self.hyperparams.get("num_out_channels", 3)
         self.B = self.hyperparams.get("batch_size", 64)
         self.num_patches = (self.crop_size // self.patch_size) ** 2
+        self.norm_pix_loss = self.hyperparams.get("norm_pix_loss", False)
 
         self.model = MaskedAutoencoderViT(
             sensor=self.hyperparams["sensor"],
@@ -148,6 +154,9 @@ class MAETask(LightningModule):
             ),
             mask_tokens_reduction_decoder=self.hyperparams.get(
                 "mask_tokens_reduction_decoder", False
+            ),
+            keep_unreduced_decoder=self.hyperparams.get(
+                "keep_unreduced_decoder", False
             ),
         )
 
@@ -200,7 +209,7 @@ class MAETask(LightningModule):
 
         optimizer_class = getattr(optim, self.hyperparams.get("optimizer", "AdamW"))
         lr = self.hyperparams.get("lr", 1e-3)
-        actual_lr = lr * self.B / 256 * self.trainer.num_devices
+        actual_lr = lr * self.B / 256
         weight_decay = self.hyperparams.get("weight_decay", 0.05)
         betas = self.hyperparams.get("betas", (0.9, 0.95))
         optimizer = optimizer_class(
@@ -242,7 +251,11 @@ class MAETask(LightningModule):
         item = self.forward(item)
 
         item["loss"] = masked_reconstruction_loss(
-            item["target"], item["pred"], item["mask_target"], self.patch_size
+            item["target"],
+            item["pred"],
+            item["mask_target"],
+            self.patch_size,
+            self.norm_pix_loss,
         )
 
         self.log(
@@ -321,7 +334,11 @@ class MAETask(LightningModule):
         item = self.shared_step("val", *args, **kwargs)
 
         # Only log images of first batch
-        if args[1] > 0 or self.trainer.num_devices > 1 and self.device.index != 1:
+        if (
+            self.trainer is None
+            or args[1] > 0
+            or (self.trainer.num_devices > 1 and self.device.index != 1)
+        ):
             return {}
 
         images = self.prepare_output(item)
