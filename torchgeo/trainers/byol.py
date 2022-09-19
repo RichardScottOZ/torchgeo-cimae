@@ -261,7 +261,7 @@ class BYOLTask(pl.LightningModule):
         pretrained = self.hyperparams["imagenet_pretrained"]
         encoder_name = self.hyperparams["encoder_name"]
 
-        if parse(torchvision.__version__) >= parse("0.12"):
+        if parse(torchvision.__version__) >= parse("0.13"):
             if pretrained:
                 kwargs = {
                     "weights": getattr(
