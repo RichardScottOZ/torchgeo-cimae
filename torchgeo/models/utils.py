@@ -6,13 +6,8 @@ from torch import Tensor
 from torch.nn import Conv2d, LayerNorm, Linear, Module, init
 
 
-# TODO: Attribution (Facebook)
-# --------------------------------------------------------
-# 2D sine-cosine position embedding
-# References:
-# Transformer: https://github.com/tensorflow/models/blob/master/official/nlp/transformer/model_utils.py
-# MoCo v3: https://github.com/facebookresearch/moco-v3
-# --------------------------------------------------------
+# All function based or directly from MAE: https://github.com/facebookresearch/mae/
+
 def get_2d_sincos_pos_embed(
     embed_dim: int,
     grid_size: int,

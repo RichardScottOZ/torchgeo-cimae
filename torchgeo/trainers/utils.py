@@ -152,7 +152,7 @@ def reinit_initial_conv_layer(
 
     return new_layer
 
-
+# Function after here are based on implementions in MAE: https://github.com/facebookresearch/mae/
 def patchify(imgs: Tensor, patch_size: int) -> Tensor:
     """Patches a batch of images.
 
@@ -211,7 +211,6 @@ def pad_img_dims(img: Tensor, pad_dim: int) -> Tensor:
     img_padded[:, :C] = img
 
     return img_padded
-
 
 def random_masking(
     mask: Tensor, num_keep: int, probability: float, **kwargs: Any
