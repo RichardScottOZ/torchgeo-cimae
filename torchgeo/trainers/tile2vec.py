@@ -1,7 +1,6 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
-
 """Tile2Vec tasks."""
+
+# Based on Tile2Vec: https://github.com/ermongroup/tile2vec/
 
 from typing import Any, cast
 

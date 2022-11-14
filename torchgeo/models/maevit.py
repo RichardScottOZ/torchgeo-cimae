@@ -1,5 +1,8 @@
 """MaskedVit."""
 
+# Based on  MAE: https://github.com/facebookresearch/mae/
+#           SatMAE: https://arxiv.org/abs/2207.08051
+
 from typing import cast
 
 import deepspeed

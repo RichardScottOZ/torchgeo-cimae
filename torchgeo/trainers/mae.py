@@ -1,6 +1,5 @@
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
-# TODO: Attribution (Facebook)
+# Based on https://github.com/facebookresearch/mae/
+
 """MAE tasks."""
 
 from typing import Any, cast
