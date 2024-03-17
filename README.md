@@ -1,4 +1,4 @@
-This is fork of the [TorchGeo](https://github.com/microsoft/torchgeo/) library implementing multiple self-supervised learning methods as part of my master thesis.
+This is fork of the [TorchGeo](https://github.com/microsoft/torchgeo/) library implementing multiple self-supervised learning methods as part of my [Mike Boss] master thesis.
 
 Implemented architectures:
 - [Tile2Vec](https://github.com/ermongroup/tile2vec/)
@@ -8,3 +8,5 @@ Implemented architectures:
     - [MAE](https://github.com/facebookresearch/mae/)
     - [SatMAE](https://arxiv.org/abs/2207.08051)
     - CIMAE (Master Thesis)
+
+    TODO - point at CIMAE in the code
